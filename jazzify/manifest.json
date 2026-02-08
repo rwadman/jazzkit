@@ -1,0 +1,9 @@
+{
+  "name": "Jazzify",
+  "version": "1.0.0",
+  "title": "Jazzify",
+  "description": "Make score align better with jazz conventions",
+  "author": "User",
+  "requires": "4.1.0",
+  "category": "PLAYBACK"
+}
