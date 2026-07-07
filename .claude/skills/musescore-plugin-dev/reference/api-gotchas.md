@@ -1,116 +1,85 @@
-# MuseScore 4 plugin API — hard-won gotchas
+# MuseScore 4 plugin API — gotchas
 
-Every item below was verified this session against the MuseScore source
-(`scripts/fetch-mscore-src.sh`) or a real crash dump / log — not guessed. File
-paths are within the MuseScore repo checkout. When in doubt, **grep the source**;
-the online plugin docs are thin and sometimes wrong about MuseScore 4.
+All verified this session against MuseScore source (`scripts/fetch-mscore-src.sh`)
+or a real crash/log. Online plugin docs are thin and sometimes wrong for MS4 —
+**grep the source** when unsure.
 
 ## Environment / workflow
 
-- **There is NO CLI plugin runner in MuseScore 4.** `mscore --help` has
-  `--test-case*` (MuseScore's own internal QML tests) and `-j`/`-o`
-  (score conversion), but nothing that runs a user `.qml` plugin against a
-  score. Plugins only execute inside the GUI. Your feedback loop is:
-  sync → run in GUI → read the log (`scripts/mslog.sh`) → analyze crash dump
-  (`scripts/analyze-crash.py`). Plan for that; don't look for a headless
-  plugin harness that doesn't exist.
-- MuseScore **re-reads a plugin's `.qml` each time you run it**, so edits to an
-  existing file need no restart. **New `.qml` files** need a restart and must be
-  **enabled once** in Home > Plugins (new plugins default to disabled).
-- Plugins have no visible stdout. `console.log(...)` goes to the MuseScore log
-  (`~/Library/Application Support/MuseScore/MuseScore4/logs/`). Every dispatched
-  action is logged as `ActionsDispatcher::doDispatch | try call action: <code>` —
-  this is how you see which step a plugin reached before misbehaving.
-- Crash dumps (Crashpad `.dmp`) land in `logs/dumps/completed/`. The log has NO
-  usable stack trace for a crash; `scripts/analyze-crash.py` reconstructs one.
+- **No CLI plugin runner.** `mscore --help` has only `--test-case*` (MS's own QML
+  tests) and `-j`/`-o` (conversion). Plugins run in the GUI; feedback is the log +
+  crash dumps.
+- MS **re-reads a plugin's `.qml` each run** (no restart). A **new** `.qml` needs
+  a restart + a one-time enable in Home > Plugins (new plugins default disabled).
+- No plugin stdout. `console.log` → the log
+  (`~/Library/Application Support/MuseScore/MuseScore4/logs/`). Each action logs as
+  `doDispatch | try call action: <code>` — shows which step was reached.
+- Crash minidumps → `logs/dumps/completed/`. The log has no stack trace;
+  `scripts/analyze-crash.py` reconstructs one.
 
-## `cmd("...")` — running built-in actions
+## `cmd("...")` — built-in actions
 
-- `cmd(s)` (top-level plugin function) dispatches the action code `s` through
-  the global `ActionsDispatcher`, identical to clicking the menu. Confirmed in
-  `src/engraving/api/v1/qmlpluginapi.cpp` (`PluginAPI::cmd`).
-- **Action codes are NOT the menu labels.** Find the real code with
+- `cmd(s)` dispatches action code `s` via the global `ActionsDispatcher`, same as
+  the menu (`api/v1/qmlpluginapi.cpp`, `PluginAPI::cmd`).
+- **Codes ≠ menu labels.** Find them:
   `grep -rn 'registerAction' src/notationscene/internal/notationactioncontroller.cpp`.
-  Notably:
-  - "Toggle rhythmic slash notation" → `cmd("slash-rhythm")`
-  - "Fill with slashes" → `cmd("slash-fill")`
-  - "Voice 3" (move selection to voice 3) → `cmd("voice-3")`
-  - swap voices 1&3 → `cmd("voice-x13")`
-- A dispatched `cmd()` operates on **`curScore.selection`** (the engraving
-  selection). Setting the selection from the plugin (see below) DOES drive it —
-  but only when the selection is not locked.
+  E.g. "Toggle rhythmic slash notation" → `slash-rhythm`; "Fill with slashes" →
+  `slash-fill`; "Voice 3" → `voice-3`; swap voices 1&3 → `voice-x13`.
+- A dispatched `cmd()` acts on `curScore.selection`.
 
 ## Selection
 
-- `curScore.selection.selectRange(startTick, endTick, startStaff, endStaff)`
-  works and IS reflected in `curScore.selection` and in subsequent `cmd()`s —
-  BUT **`endStaff` is exclusive** and `endTick` is exclusive. To select one
-  staff: `selectRange(a, b, staffIdx, staffIdx + 1)`.
-- **`selectRange` silently returns `false` and changes nothing while a
-  `curScore.startCmd()` is open** — the selection is locked during an open
-  command (`Selection::checkSelectionIsNotLocked`,
-  `src/engraving/api/v1/selection.cpp`). Symptom: your `selectRange` no-ops and a
-  following `cmd()` runs against the *previous* (e.g. the user's source)
-  selection. **Do selection changes OUTSIDE `startCmd`/`endCmd`.**
-- Always **verify** the selection landed where you intended before running a
-  destructive `cmd()`: read back `curScore.selection.startStaff`. If it's not
-  your target, abort — otherwise you corrupt whatever was selected before.
-- `rewind(Cursor.SELECTION_END)` sets `tick` to 0 when the selection reaches the
-  end of the score; fall back to `curScore.lastSegment.tick + 1`.
+- `selectRange(startTick, endTick, startStaff, endStaff)`: **`endTick` and
+  `endStaff` are exclusive**. One staff → `selectRange(a, b, i, i+1)`.
+- **`selectRange` silently returns `false` and does nothing while a `startCmd` is
+  open** — selection is locked (`Selection::checkSelectionIsNotLocked`,
+  `api/v1/selection.cpp`). Symptom: it no-ops and the next `cmd()` runs on the
+  *previous* selection. Do selection changes OUTSIDE `startCmd`/`endCmd`.
+- Before a destructive `cmd()`, verify `curScore.selection.startStaff` is your
+  target; abort otherwise (else you corrupt the prior selection).
+- `rewind(Cursor.SELECTION_END)` sets `tick` to 0 at end of score → fall back to
+  `curScore.lastSegment.tick + 1`.
 
 ## Cursor (note input)
 
-- Set **`staffIdx` and `voice` BEFORE** `rewind`/`rewindToTick`, not after.
-  `rewindToTick` does `setSegment(); nextInTrack()`, and `nextInTrack` searches
-  using the *current* track (`src/engraving/api/v1/cursor.cpp`).
-- **`rewindToTick` skips forward past any segment that has no element in the
-  current track.** So rewinding directly on an EMPTY voice runs off the end of
-  the score → cursor position undefined → `addNote` logs
-  `"cursor location is undefined"` and adds nothing. Workaround to write into an
-  empty voice N: set `voice = 0` (voice 0 always has content — MuseScore fills it
-  with rests), `rewindToTick(t)`, THEN set `voice = N` (this keeps the segment;
-  `setVoice`/`setStaffIdx` only change the track, not the segment), then
-  `setDuration` + `addNote`.
+- Set `staffIdx`/`voice` **before** `rewind`/`rewindToTick`. `rewindToTick` does
+  `setSegment(); nextInTrack()`, and `nextInTrack` uses the *current* track
+  (`api/v1/cursor.cpp`).
+- **`rewindToTick` skips forward past segments with no element in the current
+  track.** Rewinding on an EMPTY voice runs off the score end → position undefined
+  → `addNote` logs `"cursor location is undefined"` and adds nothing. To write
+  into empty voice N: set `voice=0` (always has content), `rewindToTick(t)`, then
+  set `voice=N` (keeps the segment; `setVoice`/`setStaffIdx` change only the
+  track), then `setDuration` + `addNote`.
 
-## Drum / percussion staves — the big traps
+## Drum / percussion staves
 
-- **You cannot write an arbitrary pitched rhythm onto a drum staff with the
-  cursor.** In `NoteInput::addPitch` (`src/engraving/editing/noteinput.cpp`), for
-  a drumset staff:
-  - `if (!ds->isValid(nval.pitch)) return nullptr;` — a pitch that isn't a valid
-    drum instrument is **silently dropped** (no note, no error). This is why
-    copying a Trumpet melody to a drum staff via `cursor.addNote` produced zero
-    notes.
-  - `track = ds->voice(pitch) + staffBase;` — **the drumset FORCES the voice**
-    based on the pitch. Your `cursor.voice` is overridden. So you can't choose
-    voice 3 via cursor input on a drum staff.
-  - The reliable way to get pitched material onto a drum staff (with proper
-    pitch→instrument mapping) is `cmd("copy")` then `cmd("paste")` — the same
-    path the GUI uses.
+- **Cannot write an arbitrary pitched rhythm onto a drum staff with the cursor.**
+  In `NoteInput::addPitch` (`src/engraving/editing/noteinput.cpp`) for a drumset:
+  - invalid drum pitch → `return nullptr` (silently dropped — no note, no error);
+  - `track = ds->voice(pitch) + staffBase` → **drumset forces the voice**,
+    overriding `cursor.voice`.
+  - Reliable path for pitched → drum: `cmd("copy")` + `cmd("paste")` (as the GUI).
 - `part.hasDrumStaff` finds the percussion part; `Math.floor(part.startTrack/4)`
-  is its absolute staff index (robust even with multi-staff parts like Piano).
-- The `Drumset` API (`part`/`instrument` → drumset; `isValid`, `voice`, `line`,
-  `noteHead`) exists **since MuseScore 4.6** — don't rely on it for ≤4.5.
+  is its absolute staff index (robust with multi-staff parts).
+- The `Drumset` API (`isValid`/`voice`/`line`/`noteHead`) exists **since 4.6**.
 
 ## `startCmd` / `endCmd` and crashes
 
-- Wrap a *single* logical edit in `curScore.startCmd()` / `curScore.endCmd()`.
-- **Do NOT wrap multiple `cmd("...")` calls in one outer `startCmd`.** Each
-  built-in `cmd()` runs its own command; nesting them inside a plugin `startCmd`
-  leaves the score locked and un-relaid-out between steps, and operating on stale
-  segment pointers crashes MuseScore. The real `voice-3` crash this session was
-  exactly this: `changeSelectedElementsVoice → undoRemoveElement →
-  Measure::remove → SegmentList::remove` on a stale pointer (see the analyze-crash
-  output). Running copy/paste/voice-3/slash-rhythm/slash-fill as **separate
-  standalone `cmd()`s** (no outer `startCmd`) fixed it — the score lays out
-  between steps.
+- Wrap a *single* logical edit in `startCmd()`/`endCmd()`.
+- **Never wrap multiple `cmd("...")` in one outer `startCmd`.** Each `cmd()` is
+  its own command; nesting leaves the score locked and un-relaid-out, and stale
+  segment pointers crash MS. This session's `voice-3` crash was exactly that:
+  `changeSelectedElementsVoice → undoRemoveElement → Measure::remove →
+  SegmentList::remove`. Fix: run the `cmd()`s standalone (no outer `startCmd`) so
+  the score lays out between steps.
 - `curScore.doLayout(fraction(0,1), fraction(-1,1))` forces a mid-command
-  relayout if you truly need one (since 4.6), but prefer separate commands.
+  relayout (since 4.6), but prefer separate commands.
 
 ## Menus
 
-- `menuPath: "Plugins.Jazzify.My Action"` nests the plugin under a **Jazzify**
-  submenu. Multiple `.qml` files sharing the `"Plugins.Jazzify.*"` prefix group
-  together. `setMenuPath` logs a "deprecated" debug line but still works in 4.7.
-- One `.qml` = one menu entry = one `MuseScore { onRun: ... }`. For several
-  independent actions, use several `.qml` files with a shared `menuPath` prefix.
+- `menuPath: "Plugins.Jazzify.My Action"` nests under a Jazzify submenu; multiple
+  `.qml` sharing the `"Plugins.Jazzify.*"` prefix group together. `setMenuPath`
+  logs "deprecated" but works in 4.7.
+- One `.qml` = one menu entry = one `MuseScore { onRun }`. Several independent
+  actions → several `.qml` with a shared `menuPath` prefix.
