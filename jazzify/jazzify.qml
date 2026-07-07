@@ -7,7 +7,8 @@ import Muse.UiComponents
 
 MuseScore {
     version: "0.2"
-    title: "Jazzify"
+    title: "Fix Marcato Staccatos"
+    menuPath: "Plugins.Jazzify.Fix Marcato Staccatos"
     description: "Make score align better with jazz conventions"
 
 //=============================================================================
