@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Window
 import QtQuick.Layouts
-import QtQuick.Controls
+import QtQuick.Controls as Ctrl
 
 import MuseScore
 import Muse.UiComponents
@@ -28,6 +28,42 @@ MuseScore {
         title: "Jazzify"
         text: ""
         onAccepted: { close(); }
+    }
+
+//=============================================================================
+// Settings persistence
+//
+// The plugin QML is reinstantiated on every run, so the dialog choices are stored
+// on the score as a metatag. That recalls them whenever the score is open (this
+// session or later) and saves them into the file when the score is saved.
+
+    property string settingsTag: "jazzifyLineBreaks"
+
+    function loadSettings()
+    {
+        if (!curScore) return;
+        var raw = curScore.metaTag(settingsTag);
+        if (!raw) return;
+        try {
+            var s = JSON.parse(raw);
+            if (s.d !== undefined) cbDouble.checked = s.d;
+            if (s.r !== undefined) cbRepeats.checked = s.r;
+            if (s.e !== undefined) tfEveryN.text = s.e;
+            if (s.mn !== undefined) tfMinBars.text = s.mn;
+            if (s.mx !== undefined) tfMaxBars.text = s.mx;
+        } catch (e) { }
+    }
+
+    function saveSettings()
+    {
+        if (!curScore) return;
+        curScore.setMetaTag(settingsTag, JSON.stringify({
+            d:  cbDouble.checked,
+            r:  cbRepeats.checked,
+            e:  tfEveryN.text,
+            mn: tfMinBars.text,
+            mx: tfMaxBars.text
+        }));
     }
 
 //=============================================================================
@@ -83,64 +119,158 @@ MuseScore {
     }
 
 //=============================================================================
-// Break computation
+// Boxes (visual measures)
 
-    // Returns a boolean[] the same length as measures: isBreak[i] === true means a
-    // line break is placed ON measure i (the system ends after measure i).
+    // Group the in-range real measures into "boxes" - what shows as one measure on
+    // the page. A multimeasure rest is one box spanning several real measures.
     //
-    // Structural breaks (double barlines / repeats) are placed first. They divide
-    // the measures into sections; within each section the "every N" breaks are
-    // applied, then the break before an over-short trailing line is dropped.
-    function computeBreaks(measures, opts)
+    // nextMeasureMM walks the visual boxes and every box exposes its start tick, so
+    // a real measure starts a new box iff its start tick is one of those box starts
+    // (interior measures of a multirest are not). Each box carries:
+    //   first / last  - its first / last real measure (breaks attach to `last`)
+    //   musicBars     - real measures it spans (for the "every N bars" count)
+    //   (each box counts as 1 for the "minimum bars per line" count)
+    function buildBoxes(measures)
     {
-        var n = measures.length;
+        var starts = {};
+        var hasStarts = false;
+        var mm = curScore.firstMeasureMM;
+        while (mm) { starts[mm.tick.ticks] = true; hasStarts = true; mm = mm.nextMeasureMM; }
+
+        var boxes = [];
+        var cur = null;
+        for (var i = 0; i < measures.length; ++i)
+        {
+            var m = measures[i];
+            if (cur === null || !hasStarts || starts[m.tick.ticks])
+            {
+                cur = { first: m, last: m, musicBars: 1 };
+                boxes.push(cur);
+            }
+            else
+            {
+                cur.last = m;
+                cur.musicBars += 1;
+            }
+        }
+        return boxes;
+    }
+
+//=============================================================================
+// Break computation (per box)
+
+    // Decide which boxes get a line break after them. Returns an array of real
+    // measures to attach a LINE break to (each box's last real measure).
+    //
+    // Structural breaks (double barlines / repeats) come first and split the boxes
+    // into sections. Within a section, "every N" breaks fall on the everyN-bar grid
+    // (bars N, 2N, 3N ... from the section start), placed at the box boundary that
+    // lands on the grid line - so a 6-bar rest with N=4 keeps counting to bar 8
+    // rather than breaking at 6. Finally the minimum-bars rule removes/moves breaks
+    // around any line with too few boxes.
+    function computeBoxBreaks(boxes, opts)
+    {
+        var n = boxes.length;
+        if (n === 0) return [];
+
+        // tag[i]: 0 = no break, 1 = structural break, 2 = "every N" break (removable)
+        var tag = [];
         var structural = [];
-        var isBreak = [];
-        for (var i = 0; i < n; ++i) { structural.push(false); isBreak.push(false); }
+        for (var i = 0; i < n; ++i) { tag.push(0); structural.push(false); }
 
         // 1. Structural breaks.
         for (var i = 0; i < n; ++i)
         {
-            var m = measures[i];
-            if (opts.atDouble && endsWithDoubleBarline(m)) structural[i] = true;
-            if (opts.atRepeats && m.repeatEnd)             structural[i] = true;
-            // "before start-repeat" -> break on the previous measure
-            if (opts.atRepeats && m.repeatStart && i > 0)  structural[i - 1] = true;
+            var b = boxes[i];
+            if (opts.atDouble && endsWithDoubleBarline(b.last)) structural[i] = true;
+            if (opts.atRepeats && b.last.repeatEnd)             structural[i] = true;
+            // "before start-repeat" -> break on the previous box
+            if (opts.atRepeats && b.first.repeatStart && i > 0) structural[i - 1] = true;
         }
-        // Never break on the very last measure of the range (nothing follows).
-        if (n > 0) structural[n - 1] = false;
-        for (var i = 0; i < n; ++i) if (structural[i]) isBreak[i] = true;
+        structural[n - 1] = false;   // never break on the last box (nothing follows)
+        for (var i = 0; i < n; ++i) if (structural[i]) tag[i] = 1;
 
-        // 2. "Every N" breaks, per section between structural breaks.
+        // 2. "Every N" breaks on the everyN-bar grid. acc is the cumulative music-bar
+        // count from the section start; a break falls where acc lands on a grid line
+        // (a multiple of everyN). acc is not reset after a break - only at a section
+        // boundary - so the grid stays aligned across multibar rests.
         if (opts.everyN >= 1)
         {
-            var sectionStart = 0;
+            var acc = 0;
             for (var i = 0; i < n; ++i)
             {
-                if (structural[i] || i === n - 1)
-                {
-                    applyEveryN(isBreak, sectionStart, i, opts.everyN, opts.minBars);
-                    sectionStart = i + 1;
-                }
+                acc += boxes[i].musicBars;
+                if (i === n - 1) break;               // no break after the last box
+                if (structural[i]) { acc = 0; continue; }   // section boundary: restart the grid
+                if (acc % opts.everyN === 0) tag[i] = 2;
             }
         }
-        return isBreak;
+
+        // 3. Minimum bars per line: merge any too-short line into the previous one
+        // by dropping the ("every N") break before it. Boxes count as 1 bar here.
+        minMerge(tag, n, opts.minBars, opts.maxBars);
+
+        var res = [];
+        for (var i = 0; i < n; ++i) if (tag[i] > 0) res.push(boxes[i].last);
+        return res;
     }
 
-    // Subdivide the section of measures [a..b] (inclusive) with a break every n
-    // measures. If the trailing line would be shorter than minBars, drop the last
-    // internal break so that short tail merges into the previous line.
-    function applyEveryN(isBreak, a, b, n, minBars)
+    // Partition the boxes into lines by the current breaks. Each line records its
+    // box range [s..e] and box count (both the minimum and maximum rules count
+    // visible boxes, a multirest being one box).
+    function computeLines(tag, n)
     {
-        var internal = [];
-        for (var j = a + n - 1; j < b; j += n) internal.push(j);
-        if (internal.length === 0) return;
+        var lines = [];
+        var s = 0;
+        for (var i = 0; i < n; ++i)
+        {
+            if (tag[i] > 0 || i === n - 1)
+            {
+                lines.push({ s: s, e: i, boxCount: i - s + 1 });
+                s = i + 1;
+            }
+        }
+        return lines;
+    }
 
-        var last = internal[internal.length - 1];
-        var lastLineLen = b - last;               // measures in (last+1 .. b)
-        if (lastLineLen < minBars) internal.pop();
+    // Fix lines shorter than minBars boxes by merging them into a neighbour, until
+    // stable. A short line normally merges into the PREVIOUS line (drop the break
+    // before it). But that break is only removable if it is an "every N" break
+    // (tag 2) - if it is structural (tag 1: a double barline / repeat) or there is
+    // no line before, the short line merges into the NEXT line instead (drop the
+    // break after it). Structural breaks are never removed. A merge is skipped when
+    // it would make the merged line exceed maxBars visible boxes (0 = no limit).
+    function minMerge(tag, n, minBars, maxBars)
+    {
+        if (minBars <= 1) return;
+        var guard = 0;
+        while (guard++ < 10000)
+        {
+            var lines = computeLines(tag, n);
+            var acted = false;
+            for (var li = 0; li < lines.length; ++li)
+            {
+                var L = lines[li];
+                if (L.boxCount >= minBars) continue;
 
-        for (var k = 0; k < internal.length; ++k) isBreak[internal[k]] = true;
+                var prev = (li > 0) ? lines[li - 1] : null;
+                var next = (li < lines.length - 1) ? lines[li + 1] : null;
+
+                var beforeRemovable = (L.s > 0 && tag[L.s - 1] === 2);
+                var afterRemovable  = (L.e < n - 1 && tag[L.e] === 2);
+                var canBefore = beforeRemovable && prev && (maxBars <= 0 || prev.boxCount + L.boxCount <= maxBars);
+                var canAfter  = afterRemovable  && next && (maxBars <= 0 || L.boxCount + next.boxCount <= maxBars);
+
+                var dropIdx = -1;
+                if (beforeRemovable)          // prefer merging into the previous line
+                    dropIdx = canBefore ? (L.s - 1) : (canAfter ? L.e : -1);
+                else if (canAfter)            // structural / no break before -> merge into next
+                    dropIdx = L.e;
+
+                if (dropIdx >= 0) { tag[dropIdx] = 0; acted = true; break; }
+            }
+            if (!acted) break;
+        }
     }
 
 //=============================================================================
@@ -155,7 +285,8 @@ MuseScore {
             return;
         }
 
-        var isBreak = computeBreaks(measures, opts);
+        var boxes = buildBoxes(measures);
+        var breakMeasures = computeBoxBreaks(boxes, opts);
 
         curScore.startCmd();
 
@@ -175,12 +306,11 @@ MuseScore {
 
         // 2. Add the new line breaks.
         var added = 0;
-        for (var i = 0; i < measures.length; ++i)
+        for (var i = 0; i < breakMeasures.length; ++i)
         {
-            if (!isBreak[i]) continue;
             var lb = newElement(Element.LAYOUT_BREAK);
             lb.layoutBreakType = LayoutBreak.LINE;
-            measures[i].add(lb);
+            breakMeasures[i].add(lb);
             ++added;
         }
 
@@ -198,7 +328,7 @@ MuseScore {
         id: optionsDialog
         title: qsTr("Format Line Breaks")
         width: 360
-        height: 260
+        height: 300
         modality: Qt.ApplicationModal
         flags: Qt.Dialog
         color: "#f0f0f0"
@@ -209,25 +339,39 @@ MuseScore {
             anchors.margins: 16
             spacing: 10
 
-            CheckBox
+            Ctrl.CheckBox
             {
                 id: cbDouble
                 checked: true
                 text: qsTr("Line break at double barlines")
+                // Force dark label text; the default contentItem inherits a light
+                // theme colour that is invisible on this dialog's background.
+                contentItem: Text {
+                    text: cbDouble.text
+                    color: "#202020"
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: cbDouble.indicator.width + cbDouble.spacing
+                }
             }
 
-            CheckBox
+            Ctrl.CheckBox
             {
                 id: cbRepeats
                 checked: true
                 text: qsTr("Line break at repeats")
+                contentItem: Text {
+                    text: cbRepeats.text
+                    color: "#202020"
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: cbRepeats.indicator.width + cbRepeats.spacing
+                }
             }
 
             RowLayout
             {
                 spacing: 8
-                Label { text: qsTr("Line break every"); color: "#202020" }
-                TextField
+                Ctrl.Label { text: qsTr("Line break every"); color: "#202020" }
+                Ctrl.TextField
                 {
                     id: tfEveryN
                     text: "4"
@@ -235,14 +379,14 @@ MuseScore {
                     horizontalAlignment: TextInput.AlignHCenter
                     inputMethodHints: Qt.ImhDigitsOnly
                 }
-                Label { text: qsTr("bars (empty = skip)"); color: "#202020" }
+                Ctrl.Label { text: qsTr("bars (empty = skip)"); color: "#202020" }
             }
 
             RowLayout
             {
                 spacing: 8
-                Label { text: qsTr("Minimum bars on a line"); color: "#202020" }
-                TextField
+                Ctrl.Label { text: qsTr("Minimum bars on a line"); color: "#202020" }
+                Ctrl.TextField
                 {
                     id: tfMinBars
                     text: "3"
@@ -252,18 +396,33 @@ MuseScore {
                 }
             }
 
+            RowLayout
+            {
+                spacing: 8
+                Ctrl.Label { text: qsTr("Maximum bars on a line"); color: "#202020" }
+                Ctrl.TextField
+                {
+                    id: tfMaxBars
+                    text: "6"
+                    Layout.preferredWidth: 48
+                    horizontalAlignment: TextInput.AlignHCenter
+                    inputMethodHints: Qt.ImhDigitsOnly
+                }
+                Ctrl.Label { text: qsTr("(empty = no limit)"); color: "#202020" }
+            }
+
             Item { Layout.fillHeight: true }
 
             RowLayout
             {
                 Layout.alignment: Qt.AlignRight
                 spacing: 8
-                Button
+                Ctrl.Button
                 {
                     text: qsTr("Cancel")
                     onClicked: optionsDialog.close()
                 }
-                Button
+                Ctrl.Button
                 {
                     text: qsTr("Apply")
                     onClicked:
@@ -272,13 +431,17 @@ MuseScore {
                         if (isNaN(everyN) || everyN < 1) everyN = 0;   // empty / invalid -> skip
                         var minBars = parseInt(tfMinBars.text, 10);
                         if (isNaN(minBars) || minBars < 1) minBars = 1;
+                        var maxBars = parseInt(tfMaxBars.text, 10);
+                        if (isNaN(maxBars) || maxBars < 1) maxBars = 0;   // empty / invalid -> no limit
 
+                        saveSettings();
                         optionsDialog.close();
                         applyLineBreaks({
                             atDouble:  cbDouble.checked,
                             atRepeats: cbRepeats.checked,
                             everyN:    everyN,
-                            minBars:   minBars
+                            minBars:   minBars,
+                            maxBars:   maxBars
                         });
                     }
                 }
@@ -300,6 +463,7 @@ MuseScore {
             showMessage(qsTr("Open a score first."));
             return;
         }
+        loadSettings();          // recall the last choices stored on this score
         optionsDialog.show();
     }
 }

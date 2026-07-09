@@ -85,6 +85,13 @@ MuseScore {
         var cursor = curScore.newCursor();
         cursor.rewind(Cursor.SELECTION_START);
         var startTick = cursor.tick;
+        // Tick of the barline the selection starts in. Pasting a range anchors at the
+        // first chordrest of the target range (Paste::pasteStaffList ->
+        // firstChordRestInRange); an empty drum measure holds only a full-measure rest at
+        // the measure start, so a paste that starts mid-measure finds no anchor and
+        // silently does nothing. We sidestep that by pasting from the measure start (where
+        // that full-measure rest lives) and clearing the leading beats afterwards.
+        var measureTick = cursor.measure.firstSegment.tick;
         cursor.rewind(Cursor.SELECTION_END);
         var endTick = cursor.tick;
         // rewind(SELECTION_END) wraps to tick 0 when the selection reaches the end of the score
@@ -94,48 +101,28 @@ MuseScore {
         // (no outer startCmd wrapping) so the score is laid out between steps - wrapping
         // them together previously crashed the "move to voice 3" step. Before every step
         // we (re)select the target region and verify it, so a failed selection aborts
-        // instead of modifying the wrong staff. Nothing outside the drum staff is
-        // changed except the clipboard (the copy of the source selection).
+        // instead of modifying the wrong staff.
 
-        // 1. Copy the source selection.
-        if (!selectStaffRange(startTick, endTick, srcStaffIdx))
+        // 1. Copy the source, extended left to the measure start so the paste below can
+        //    anchor on the drum staff's full-measure rest (which sits at the measure start).
+        if (!selectStaffRange(measureTick, endTick, srcStaffIdx))
         {
             showMessage(qsTr("Could not select the source notes. Nothing was changed."));
             return;
         }
         cmd("copy");
 
-        // 2. Make sure the drum staff has a chordrest that begins exactly at startTick,
-        // so the range paste below has an anchor. Pasting a range anchors at the first
-        // chordrest of the target range (Paste::pasteStaffList -> firstChordRestInRange);
-        // an empty drum measure holds only a full-measure rest at the measure start, so a
-        // mid-measure paste finds no anchor there and silently does nothing (this is why
-        // partial-bar selections failed). We can't rewindToTick onto the empty drum voice
-        // (it skips forward past segments with no element in the track), so instead we
-        // rewind a cursor to the selection start - which lands on the real source segment
-        // at startTick - then retarget it to voice 1 of the drum staff (setStaffIdx /
-        // setVoice only change the track, keeping the segment) and write a rest. That
-        // splits the drum rest at startTick. It only touches the region we overwrite next.
-        var boundary = curScore.newCursor();
-        boundary.rewind(Cursor.SELECTION_START);
-        var firstDur = boundary.element ? boundary.element.duration : null;
-        boundary.staffIdx = drumStaffIdx;
-        boundary.voice = 0;
-        if (firstDur)
-            boundary.setDuration(firstDur.numerator, firstDur.denominator);
-        else
-            boundary.setDuration(1, 16);
-        boundary.addRest();
-
-        // 3. Paste into the drum staff (paste converts the pitched notes to drum notes).
-        if (!selectStaffRange(startTick, endTick, drumStaffIdx))
+        // 2. Paste into the drum staff (paste converts the pitched notes to drum notes).
+        if (!selectStaffRange(measureTick, endTick, drumStaffIdx))
         {
             showMessage(qsTr("Could not select the drum staff to paste into. Nothing was changed."));
             return;
         }
         cmd("paste");
 
-        // 4. Move the pasted drum notes to voice 3.
+        // 3. Move the selected region to voice 3. This runs right after the paste (before
+        //    the leading-beats cleanup below); doing the cleanup delete first left the
+        //    following selectRange incomplete, so voice-3 only moved part of the comping.
         if (!selectStaffRange(startTick, endTick, drumStaffIdx))
         {
             showMessage(qsTr("Pasted into the drum staff, but could not re-select it to move to voice 3."));
@@ -143,13 +130,26 @@ MuseScore {
         }
         cmd("voice-3");
 
-        // 5. Toggle rhythmic slash notation on the voice 3 drum notes.
+        // 4. Toggle rhythmic slash notation on the voice 3 drum notes.
         if (!selectStaffRange(startTick, endTick, drumStaffIdx))
         {
             showMessage(qsTr("Moved to voice 3, but could not re-select the drum staff for slash notation."));
             return;
         }
         cmd("slash-rhythm");
+
+        // 5. Clear the leading beats we pulled in before the real selection (still in
+        //    voice 1), turning them back into rests, so only the selected region carries
+        //    the comping cue. The comping now lives in voice 3, outside this range.
+        if (startTick > measureTick)
+        {
+            if (!selectStaffRange(measureTick, startTick, drumStaffIdx))
+            {
+                showMessage(qsTr("Applied the comping cue, but could not clear the leading beats."));
+                return;
+            }
+            cmd("delete");
+        }
     }
 
 //=============================================================================
