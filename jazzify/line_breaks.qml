@@ -57,13 +57,29 @@ MuseScore {
     function saveSettings()
     {
         if (!curScore) return;
-        curScore.setMetaTag(settingsTag, JSON.stringify({
+        var val = JSON.stringify({
             d:  cbDouble.checked,
             r:  cbRepeats.checked,
             e:  tfEveryN.text,
             mn: tfMinBars.text,
             mx: tfMaxBars.text
-        }));
+        });
+        curScore.setMetaTag(settingsTag, val);
+
+        // Share with the parts. Reading a metatag already falls back to the master
+        // score, so writing from the main score reaches every part; this loop also
+        // overwrites any value a part had set on its own. The API has no upward link
+        // from a part to the master, so a change made while viewing a part cannot be
+        // propagated and stays local to that part.
+        var ex = curScore.excerpts;
+        if (ex)
+        {
+            for (var i = 0; i < ex.length; ++i)
+            {
+                var ps = ex[i].partScore;
+                if (ps) ps.setMetaTag(settingsTag, val);
+            }
+        }
     }
 
 //=============================================================================
