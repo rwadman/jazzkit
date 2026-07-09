@@ -1,4 +1,4 @@
 #!/bin/bash
 
-rm -r ~/Documents/MuseScore4/Plugins/jazzify || true
-cp -r jazzify/ ~/Documents/MuseScore4/Plugins/jazzify
+rm -r "$PLUGINS_FOLDER/jazzify" || true
+cp -r jazzify/ "$PLUGINS_FOLDER/jazzify"

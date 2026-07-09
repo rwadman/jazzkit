@@ -5,9 +5,9 @@ import Muse.UiComponents
 
 MuseScore {
     version: "0.1"
-    title: "Drumify Selection to Slashes"
-    menuPath: "Plugins.Jazzify.Drumify Selection to Slashes"
-    description: "Copy the selected notes into the drum part as a rhythmic comping cue (voice 3, slash notation), then fill voice 1 with plain slashes"
+    title: "Rhythm to Drum Comping"
+    menuPath: "Plugins.Jazzify.Rhythm to Drum Comping"
+    description: "Copy the selected notes into the drum part as a rhythmic comping cue (voice 3, slash notation)"
 
 //=============================================================================
 
@@ -105,7 +105,29 @@ MuseScore {
         }
         cmd("copy");
 
-        // 2. Paste into the drum staff (paste converts the pitched notes to drum notes).
+        // 2. Make sure the drum staff has a chordrest that begins exactly at startTick,
+        // so the range paste below has an anchor. Pasting a range anchors at the first
+        // chordrest of the target range (Paste::pasteStaffList -> firstChordRestInRange);
+        // an empty drum measure holds only a full-measure rest at the measure start, so a
+        // mid-measure paste finds no anchor there and silently does nothing (this is why
+        // partial-bar selections failed). We can't rewindToTick onto the empty drum voice
+        // (it skips forward past segments with no element in the track), so instead we
+        // rewind a cursor to the selection start - which lands on the real source segment
+        // at startTick - then retarget it to voice 1 of the drum staff (setStaffIdx /
+        // setVoice only change the track, keeping the segment) and write a rest. That
+        // splits the drum rest at startTick. It only touches the region we overwrite next.
+        var boundary = curScore.newCursor();
+        boundary.rewind(Cursor.SELECTION_START);
+        var firstDur = boundary.element ? boundary.element.duration : null;
+        boundary.staffIdx = drumStaffIdx;
+        boundary.voice = 0;
+        if (firstDur)
+            boundary.setDuration(firstDur.numerator, firstDur.denominator);
+        else
+            boundary.setDuration(1, 16);
+        boundary.addRest();
+
+        // 3. Paste into the drum staff (paste converts the pitched notes to drum notes).
         if (!selectStaffRange(startTick, endTick, drumStaffIdx))
         {
             showMessage(qsTr("Could not select the drum staff to paste into. Nothing was changed."));
@@ -113,7 +135,7 @@ MuseScore {
         }
         cmd("paste");
 
-        // 3. Move the pasted drum notes to voice 3.
+        // 4. Move the pasted drum notes to voice 3.
         if (!selectStaffRange(startTick, endTick, drumStaffIdx))
         {
             showMessage(qsTr("Pasted into the drum staff, but could not re-select it to move to voice 3."));
@@ -121,21 +143,13 @@ MuseScore {
         }
         cmd("voice-3");
 
-        // 4. Toggle rhythmic slash notation on the voice 3 drum notes.
+        // 5. Toggle rhythmic slash notation on the voice 3 drum notes.
         if (!selectStaffRange(startTick, endTick, drumStaffIdx))
         {
             showMessage(qsTr("Moved to voice 3, but could not re-select the drum staff for slash notation."));
             return;
         }
         cmd("slash-rhythm");
-
-        // 5. Fill voice 1 of the drum staff with beat slashes.
-        if (!selectStaffRange(startTick, endTick, drumStaffIdx))
-        {
-            showMessage(qsTr("Applied rhythmic slashes, but could not re-select the drum staff to fill voice 1."));
-            return;
-        }
-        cmd("slash-fill");
     }
 
 //=============================================================================

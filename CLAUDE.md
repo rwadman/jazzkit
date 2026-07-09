@@ -19,8 +19,9 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 
 - `jazzify/` — the plugin. One `.qml` per menu action, sharing the
   `menuPath: "Plugins.Jazzify.*"` prefix (groups them in a Jazzify submenu):
-  `jazzify.qml` (Fix Marcato Staccatos), `drum_slashes.qml` (Drumify Selection to
-  Slashes), `manifest.json`.
+  `jazzify.qml` (Fix Marcato Staccatos), `drum_comp_cue.qml` (Rhythm to Drum
+  Comping), `fill_empty_slashes.qml` (Fill Empty Beats with Slashes),
+  `manifest.json`.
 - `DrumsetPatterns-main/` — third-party reference plugin; working drum-staff
   cursor examples. `test-plugin/` — throwaway.
 

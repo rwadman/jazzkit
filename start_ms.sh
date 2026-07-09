@@ -1,2 +1,3 @@
 #!/bin/bash
-"/Applications/MuseScore 4.app/Contents/MacOS/mscore" -d 2>&1 | tee ~/musescore-run.log
+mkdir -p logs
+"$MUSE_SCORE_FOLDER" -d 2>&1 | tee logs/musescore-run.log
