@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "title": "JazzKit",
   "description": "Make score align better with jazz conventions",
-  "author": "User",
+  "author": "Rikard Wadman",
   "requires": "4.1.0",
   "category": "PLAYBACK"
 }

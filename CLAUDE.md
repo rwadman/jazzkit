@@ -30,10 +30,10 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 ## Dev loop
 
 ```bash
-node .claude/skills/musescore-plugin-dev/scripts/check-qml.mjs plugins/*.qml
-.claude/skills/musescore-plugin-dev/scripts/sync.sh   # → run from Plugins menu (GUI)
-.claude/skills/musescore-plugin-dev/scripts/mslog.sh          # what it did
-python3 .claude/skills/musescore-plugin-dev/scripts/analyze-crash.py  # if it crashed
+node scripts/check-qml.mjs plugins/*.qml
+scripts/sync.sh   # → run from Plugins menu (GUI)
+scripts/mslog.sh          # what it did
+python3 scripts/analyze-crash.py  # if it crashed
 ```
 
 MuseScore re-reads an existing `.qml` each run; a new `.qml` needs a restart +

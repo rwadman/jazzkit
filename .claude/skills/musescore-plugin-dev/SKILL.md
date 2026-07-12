@@ -23,19 +23,19 @@ Paths are relative to the repo root. Prereqs: MuseScore 4.4+ at
 
 ```bash
 # static-check QML (no real qmllint exists; catches silent-no-op syntax slips)
-node .claude/skills/musescore-plugin-dev/scripts/check-qml.mjs plugins/*.qml
+node scripts/check-qml.mjs plugins/*.qml
 
 # copy plugin → ~/Documents/MuseScore4/Plugins/JazzKit/
-.claude/skills/musescore-plugin-dev/scripts/sync.sh
+scripts/sync.sh
 
 # newest MuseScore log, plugin-relevant lines (-f follow, -a all)
-.claude/skills/musescore-plugin-dev/scripts/mslog.sh
+scripts/mslog.sh
 
 # symbolicate the newest crash dump (or pass a .dmp path)
-python3 .claude/skills/musescore-plugin-dev/scripts/analyze-crash.py
+python3 scripts/analyze-crash.py
 
 # sparse-checkout MuseScore source into ./.mscore-src for API/action-code grepping
-.claude/skills/musescore-plugin-dev/scripts/fetch-mscore-src.sh
+scripts/fetch-mscore-src.sh
 ```
 
 ## Running the plugin (GUI only)

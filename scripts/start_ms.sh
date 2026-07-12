@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 [ -f "$ROOT/.env" ] && source "$ROOT/.env"
 : "${MUSE_SCORE_FOLDER:?set MUSE_SCORE_FOLDER (e.g. in .env)}"
 mkdir -p "$ROOT/logs"
