@@ -3,6 +3,8 @@ import QtQuick
 import MuseScore
 import Muse.UiComponents
 
+import "lib/jazzkit.js" as JazzKit
+
 MuseScore {
     version: "0.1"
     title: "Fill Empty Beats with Slashes"
@@ -28,14 +30,9 @@ MuseScore {
 
 //=============================================================================
 
-    // Select a single-staff range and confirm the selection landed on the intended
-    // staff. The dispatched slash-fill acts on curScore.selection, so a failed
-    // selection must abort rather than run against the wrong region.
-    function selectStaffRange(startTick, endTick, staffIdx)
-    {
-        curScore.selection.selectRange(startTick, endTick, staffIdx, staffIdx + 1);
-        var s = curScore.selection;
-        return s && s.isRange && s.startStaff === staffIdx;
+    // Shared, unit-tested helper (plugins/lib/jazzkit.js).
+    function selectStaffRange(startTick, endTick, staffIdx) {
+        return JazzKit.selectStaffRange(curScore, startTick, endTick, staffIdx);
     }
 
 //=============================================================================
@@ -149,7 +146,7 @@ MuseScore {
 
     onRun:
     {
-        if ((mscoreMajorVersion <= 3) || (mscoreMajorVersion == 4 && mscoreMinorVersion < 4))
+        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
         {
             showMessage(qsTr("This plugin is for MuseScore 4.4 or later"));
             return;

@@ -6,6 +6,8 @@ import QtQuick.Controls as Ctrl
 import MuseScore
 import Muse.UiComponents
 
+import "lib/jazzkit.js" as JazzKit
+
 MuseScore {
     version: "0.1"
     title: "To Comp Cues"
@@ -39,36 +41,17 @@ MuseScore {
 
     property string settingsTag: "jazzKitCueNotes"
 
+    // null → first run, default all checked. JSON + excerpt mirroring live in
+    // the shared, unit-tested plugins/lib/jazzkit.js.
     function loadEnabledIds()
     {
-        if (!curScore) return null; // null → first run, default all checked
-        var raw = curScore.metaTag(settingsTag);
-        if (!raw) return null;
-        try {
-            var s = JSON.parse(raw);
-            if (s.ids !== undefined) return s.ids;
-        } catch (e) { }
-        return null;
+        var s = JazzKit.loadJsonTag(curScore, settingsTag);
+        return (s && s.ids !== undefined) ? s.ids : null;
     }
 
     function saveEnabledIds(ids)
     {
-        if (!curScore) return;
-        var val = JSON.stringify({ ids: ids });
-        curScore.setMetaTag(settingsTag, val);
-
-        // Share with the parts. Reading a metatag falls back to the master score, so
-        // writing from the main score reaches every part; this loop also overwrites any
-        // value a part set on its own (see line_breaks.qml for the full rationale).
-        var ex = curScore.excerpts;
-        if (ex)
-        {
-            for (var i = 0; i < ex.length; ++i)
-            {
-                var ps = ex[i].partScore;
-                if (ps) ps.setMetaTag(settingsTag, val);
-            }
-        }
+        JazzKit.saveJsonTag(curScore, settingsTag, { ids: ids });
     }
 
 //=============================================================================
@@ -90,27 +73,10 @@ MuseScore {
 
 //=============================================================================
 
-    // Heuristic: is this part a chord/comping instrument we'd add a cue to?
-    function isCompInstrument(part)
-    {
-        if (part.hasDrumStaff) return true;
-        var id = (part.instrumentId || "").toLowerCase();
-        var kws = ["piano", "keyboard", "organ", "synth", "harpsichord", "celesta",
-                   "clavinet", "accordion", "rhodes", "wurl", "guitar", "bass",
-                   "vibraphone", "vibes", "marimba", "banjo", "ukulele", "mandolin", "harp", "comp", "komp"];
-        for (var i = 0; i < kws.length; ++i)
-            if (id.indexOf(kws[i]) !== -1) return true;
-        return false;
-    }
-
-    // Select a single-staff range and confirm the selection actually landed on the
-    // intended staff. The dispatched cmd()s act on curScore.selection, so a failed
-    // selection must abort rather than run against the wrong staff.
-    function selectStaffRange(startTick, endTick, staffIdx)
-    {
-        curScore.selection.selectRange(startTick, endTick, staffIdx, staffIdx + 1);
-        var s = curScore.selection;
-        return s && s.isRange && s.startStaff === staffIdx;
+    // Shared, unit-tested helpers (plugins/lib/jazzkit.js).
+    function isCompInstrument(part) { return JazzKit.isCompInstrument(part); }
+    function selectStaffRange(startTick, endTick, staffIdx) {
+        return JazzKit.selectStaffRange(curScore, startTick, endTick, staffIdx);
     }
 
 //=============================================================================
@@ -374,7 +340,7 @@ MuseScore {
 
     onRun:
     {
-        if ((mscoreMajorVersion <= 3) || (mscoreMajorVersion == 4 && mscoreMinorVersion < 4))
+        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
         {
             showMessage(qsTr("This plugin is for MuseScore 4.4 or later"));
             return;

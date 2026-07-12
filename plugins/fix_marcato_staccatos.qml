@@ -5,6 +5,9 @@ import QtQuick.Controls
 import MuseScore
 import Muse.UiComponents
 
+import "lib/jazzkit.js" as JazzKit
+import "lib/articulations.js" as Articulations
+
 MuseScore {
     version: "0.2"
     title: "Fix Marcato Staccatos"
@@ -81,36 +84,22 @@ MuseScore {
         return a.symbol !== undefined ? a.symbol : (a.toString ? a.toString() : "");
     }
 
-    function _hasMarcato(articulations)
+    // Resolve one articulation to a canonical SymId *name* string. Only QML can
+    // do this: `.symbol` may come back as a SymId enum value or as a name string
+    // (version-dependent — hence the dual matching the original code carried).
+    // The classification itself lives in the pure, unit-tested articulations.js.
+    function _canonicalName(a)
     {
-        var above = false, below = false;
-        for (var i = 0; i < articulations.length; ++i)
-        {
-            var s = _articSymbol(articulations[i]);
-            if (s == SymId.articMarcatoAbove || s == "articMarcatoAbove") above = true;
-            if (s == SymId.articMarcatoBelow || s == "articMarcatoBelow") below = true;
-            if (above && below) break;
-        }
-        return {above: above, below: below};
-    }
-
-    function _findAndHideExistingStaccatos(articulations)
-    {
-        var found = false;
-        var staccNames = ["articStaccatAbove","articStaccatoAbove","articStaccatBelow","articStaccatoBelow","articStaccat","articStaccato"];
-        for (var i = 0; i < articulations.length; ++i)
-        {
-            var a = articulations[i];
-            if (!a) continue;
-            var s = _articSymbol(a);
-            if (staccNames.indexOf(s) >= 0 || s == SymId.articStaccatAbove || s == SymId.articStaccatBelow || s == SymId.articStaccatoAbove || s == SymId.articStaccatoBelow)
-            {
-                try { a.hidden = true; } catch (e) { }
-                try { a.visible = false; } catch (e) { }
-                found = true;
-            }
-        }
-        return found;
+        if (!a) return "";
+        var s = _articSymbol(a);
+        if (typeof s === "string") return s;
+        if (s === SymId.articMarcatoAbove) return "articMarcatoAbove";
+        if (s === SymId.articMarcatoBelow) return "articMarcatoBelow";
+        if (s === SymId.articStaccatAbove) return "articStaccatAbove";
+        if (s === SymId.articStaccatoAbove) return "articStaccatoAbove";
+        if (s === SymId.articStaccatBelow) return "articStaccatBelow";
+        if (s === SymId.articStaccatoBelow) return "articStaccatoBelow";
+        return "" + s;
     }
 
     function _tryAddHiddenStaccato(el, cursor, wantAbove)
@@ -159,18 +148,27 @@ MuseScore {
         if (!el || el.type != Element.CHORD) return result;
 
         var articulations = el.articulations || [];
-        var marc = _hasMarcato(articulations);
-        if (!(marc.above || marc.below)) return result;
+        var names = [];
+        for (var i = 0; i < articulations.length; ++i) names.push(_canonicalName(articulations[i]));
 
-        if (_findAndHideExistingStaccatos(articulations))
+        var c = Articulations.classifyChord(names);
+        if (!c.hasMarcato) return result;
+
+        if (c.staccatoIndices.length > 0)
         {
+            for (var k = 0; k < c.staccatoIndices.length; ++k)
+            {
+                var a = articulations[c.staccatoIndices[k]];
+                if (!a) continue;
+                try { a.hidden = true; } catch (e) { }
+                try { a.visible = false; } catch (e) { }
+            }
             result.hidden = 1;
             console.log("Hid existing staccato at tick " + cursor.tick + " staff " + staffIdx + " voice " + voice);
             return result;
         }
 
-        var wantAbove = marc.above;
-        var ok = _tryAddHiddenStaccato(el, cursor, wantAbove);
+        var ok = _tryAddHiddenStaccato(el, cursor, c.addAbove);
         if (ok)
         {
             result.added = 1;
@@ -256,7 +254,7 @@ MuseScore {
     onRun:
     {
 
-        if ((mscoreMajorVersion <= 3) || ((mscoreMajorVersion == 4 && mscoreMinorVersion < 4 )))
+        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
         {
         versionError.open()
         return;

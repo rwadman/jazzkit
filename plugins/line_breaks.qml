@@ -6,6 +6,9 @@ import QtQuick.Controls as Ctrl
 import MuseScore
 import Muse.UiComponents
 
+import "lib/jazzkit.js" as JazzKit
+import "lib/linebreaks.js" as LineBreaks
+
 MuseScore {
     version: "0.1"
     title: "Format Line Breaks"
@@ -39,47 +42,27 @@ MuseScore {
 
     property string settingsTag: "jazzKitLineBreaks"
 
+    // JSON + excerpt mirroring live in the shared plugins/lib/jazzkit.js.
     function loadSettings()
     {
-        if (!curScore) return;
-        var raw = curScore.metaTag(settingsTag);
-        if (!raw) return;
-        try {
-            var s = JSON.parse(raw);
-            if (s.d !== undefined) cbDouble.checked = s.d;
-            if (s.r !== undefined) cbRepeats.checked = s.r;
-            if (s.e !== undefined) tfEveryN.text = s.e;
-            if (s.mn !== undefined) tfMinBars.text = s.mn;
-            if (s.mx !== undefined) tfMaxBars.text = s.mx;
-        } catch (e) { }
+        var s = JazzKit.loadJsonTag(curScore, settingsTag);
+        if (!s) return;
+        if (s.d !== undefined) cbDouble.checked = s.d;
+        if (s.r !== undefined) cbRepeats.checked = s.r;
+        if (s.e !== undefined) tfEveryN.text = s.e;
+        if (s.mn !== undefined) tfMinBars.text = s.mn;
+        if (s.mx !== undefined) tfMaxBars.text = s.mx;
     }
 
     function saveSettings()
     {
-        if (!curScore) return;
-        var val = JSON.stringify({
+        JazzKit.saveJsonTag(curScore, settingsTag, {
             d:  cbDouble.checked,
             r:  cbRepeats.checked,
             e:  tfEveryN.text,
             mn: tfMinBars.text,
             mx: tfMaxBars.text
         });
-        curScore.setMetaTag(settingsTag, val);
-
-        // Share with the parts. Reading a metatag already falls back to the master
-        // score, so writing from the main score reaches every part; this loop also
-        // overwrites any value a part had set on its own. The API has no upward link
-        // from a part to the master, so a change made while viewing a part cannot be
-        // propagated and stays local to that part.
-        var ex = curScore.excerpts;
-        if (ex)
-        {
-            for (var i = 0; i < ex.length; ++i)
-            {
-                var ps = ex[i].partScore;
-                if (ps) ps.setMetaTag(settingsTag, val);
-            }
-        }
     }
 
 //=============================================================================
@@ -175,118 +158,28 @@ MuseScore {
 //=============================================================================
 // Break computation (per box)
 
-    // Decide which boxes get a line break after them. Returns an array of real
-    // measures to attach a LINE break to (each box's last real measure).
-    //
-    // Structural breaks (double barlines / repeats) come first and split the boxes
-    // into sections. Within a section, "every N" breaks fall on the everyN-bar grid
-    // (bars N, 2N, 3N ... from the section start), placed at the box boundary that
-    // lands on the grid line - so a 6-bar rest with N=4 keeps counting to bar 8
-    // rather than breaking at 6. Finally the minimum-bars rule removes/moves breaks
-    // around any line with too few boxes.
+    // Decide which boxes get a line break after them. Returns real measures to
+    // attach a LINE break to (each box's last real measure). Reads the structural
+    // facts off each box here (the only API-bound part), then delegates the
+    // placement algorithm to the pure, unit-tested linebreaks.js.
     function computeBoxBreaks(boxes, opts)
     {
-        var n = boxes.length;
-        if (n === 0) return [];
-
-        // tag[i]: 0 = no break, 1 = structural break, 2 = "every N" break (removable)
-        var tag = [];
-        var structural = [];
-        for (var i = 0; i < n; ++i) { tag.push(0); structural.push(false); }
-
-        // 1. Structural breaks.
-        for (var i = 0; i < n; ++i)
+        var data = [];
+        for (var i = 0; i < boxes.length; ++i)
         {
             var b = boxes[i];
-            if (opts.atDouble && endsWithDoubleBarline(b.last)) structural[i] = true;
-            if (opts.atRepeats && b.last.repeatEnd)             structural[i] = true;
-            // "before start-repeat" -> break on the previous box
-            if (opts.atRepeats && b.first.repeatStart && i > 0) structural[i - 1] = true;
-        }
-        structural[n - 1] = false;   // never break on the last box (nothing follows)
-        for (var i = 0; i < n; ++i) if (structural[i]) tag[i] = 1;
-
-        // 2. "Every N" breaks on the everyN-bar grid. acc is the cumulative music-bar
-        // count from the section start; a break falls where acc lands on a grid line
-        // (a multiple of everyN). acc is not reset after a break - only at a section
-        // boundary - so the grid stays aligned across multibar rests.
-        if (opts.everyN >= 1)
-        {
-            var acc = 0;
-            for (var i = 0; i < n; ++i)
-            {
-                acc += boxes[i].musicBars;
-                if (i === n - 1) break;               // no break after the last box
-                if (structural[i]) { acc = 0; continue; }   // section boundary: restart the grid
-                if (acc % opts.everyN === 0) tag[i] = 2;
-            }
+            data.push({
+                musicBars:   b.musicBars,
+                endsDouble:  endsWithDoubleBarline(b.last),
+                repeatEnd:   !!b.last.repeatEnd,
+                repeatStart: !!b.first.repeatStart
+            });
         }
 
-        // 3. Minimum bars per line: merge any too-short line into the previous one
-        // by dropping the ("every N") break before it. Boxes count as 1 bar here.
-        minMerge(tag, n, opts.minBars, opts.maxBars);
-
+        var idxs = LineBreaks.computeBreaks(data, opts);
         var res = [];
-        for (var i = 0; i < n; ++i) if (tag[i] > 0) res.push(boxes[i].last);
+        for (var j = 0; j < idxs.length; ++j) res.push(boxes[idxs[j]].last);
         return res;
-    }
-
-    // Partition the boxes into lines by the current breaks. Each line records its
-    // box range [s..e] and box count (both the minimum and maximum rules count
-    // visible boxes, a multirest being one box).
-    function computeLines(tag, n)
-    {
-        var lines = [];
-        var s = 0;
-        for (var i = 0; i < n; ++i)
-        {
-            if (tag[i] > 0 || i === n - 1)
-            {
-                lines.push({ s: s, e: i, boxCount: i - s + 1 });
-                s = i + 1;
-            }
-        }
-        return lines;
-    }
-
-    // Fix lines shorter than minBars boxes by merging them into a neighbour, until
-    // stable. A short line normally merges into the PREVIOUS line (drop the break
-    // before it). But that break is only removable if it is an "every N" break
-    // (tag 2) - if it is structural (tag 1: a double barline / repeat) or there is
-    // no line before, the short line merges into the NEXT line instead (drop the
-    // break after it). Structural breaks are never removed. A merge is skipped when
-    // it would make the merged line exceed maxBars visible boxes (0 = no limit).
-    function minMerge(tag, n, minBars, maxBars)
-    {
-        if (minBars <= 1) return;
-        var guard = 0;
-        while (guard++ < 10000)
-        {
-            var lines = computeLines(tag, n);
-            var acted = false;
-            for (var li = 0; li < lines.length; ++li)
-            {
-                var L = lines[li];
-                if (L.boxCount >= minBars) continue;
-
-                var prev = (li > 0) ? lines[li - 1] : null;
-                var next = (li < lines.length - 1) ? lines[li + 1] : null;
-
-                var beforeRemovable = (L.s > 0 && tag[L.s - 1] === 2);
-                var afterRemovable  = (L.e < n - 1 && tag[L.e] === 2);
-                var canBefore = beforeRemovable && prev && (maxBars <= 0 || prev.boxCount + L.boxCount <= maxBars);
-                var canAfter  = afterRemovable  && next && (maxBars <= 0 || L.boxCount + next.boxCount <= maxBars);
-
-                var dropIdx = -1;
-                if (beforeRemovable)          // prefer merging into the previous line
-                    dropIdx = canBefore ? (L.s - 1) : (canAfter ? L.e : -1);
-                else if (canAfter)            // structural / no break before -> merge into next
-                    dropIdx = L.e;
-
-                if (dropIdx >= 0) { tag[dropIdx] = 0; acted = true; break; }
-            }
-            if (!acted) break;
-        }
     }
 
 //=============================================================================
@@ -469,7 +362,7 @@ MuseScore {
 
     onRun:
     {
-        if ((mscoreMajorVersion <= 3) || (mscoreMajorVersion == 4 && mscoreMinorVersion < 4))
+        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
         {
             showMessage(qsTr("This plugin is for MuseScore 4.4 or later"));
             return;

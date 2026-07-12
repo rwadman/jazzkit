@@ -24,20 +24,32 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   Staccatos), `comp_cues.qml` (To Comp Cues), `comp_slashes.qml` (To Comp Slashes),
   `fill_empty_slashes.qml` (Fill Empty Beats with Slashes), `line_breaks.qml`
   (Format Line Breaks), `manifest.json`.
+- `plugins/lib/*.js` — shared **pure** JS libraries (`jazzkit.js`,
+  `articulations.js`, `linebreaks.js`), imported into a `.qml` via
+  `import "lib/x.js" as X`. A
+  QML-imported JS library is stateless and can't see MuseScore globals
+  (`curScore`, `cmd`, `SymId`), so lib functions take those as arguments — which
+  is also what makes them unit-testable. `sync.sh` deploys `lib/` automatically.
+- `test/` — Node unit tests for `plugins/lib/`. `load-qml-lib.mjs` evals a lib
+  the way QML does (top-level decls → the `JazzKitExports` namespace) and injects
+  fakes; `harness.mjs` is a zero-dep runner (Node 16 has no `node --test`).
 - `DrumsetPatterns-main/` — third-party reference plugin; working drum-staff
   cursor examples. `test-plugin/` — throwaway.
 
 ## Dev loop
 
 ```bash
+npm test                              # unit-test plugins/lib (node test/run.mjs)
 node scripts/check-qml.mjs plugins/*.qml
 scripts/sync.sh   # → run from Plugins menu (GUI)
 scripts/mslog.sh          # what it did
 python3 scripts/analyze-crash.py  # if it crashed
 ```
 
-MuseScore re-reads an existing `.qml` each run; a new `.qml` needs a restart +
-one-time enable in Home > Plugins.
+Only pure logic is unit-testable — anything hitting the API (`cursor.add`,
+`cmd()`, layout) is still GUI-only. Push decisions into `plugins/lib/` and keep
+the `.qml` to effects. MuseScore re-reads an existing `.qml` each run; a new
+`.qml` (or new `lib/*.js`) needs a restart + one-time enable in Home > Plugins.
 
 ## Conventions
 
