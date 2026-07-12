@@ -1,3 +1,4 @@
+// @ts-check
 // Shared pure helpers for JazzKit plugins.
 //
 // NOTHING here touches a MuseScore global directly: anything API-bound (curScore)
@@ -5,20 +6,60 @@
 // library AND lets Node unit-test every function with plain fakes.
 //
 //   QML:   import "lib/jazzkit.js" as JazzKit   →  JazzKit.isCompInstrument(part)
-//   Node:  loadQmlLib("../plugins/lib/jazzkit.js")  (see test/load-qml-lib.mjs)
+//   Node:  loadQmlLib("../plugins/lib/jazzkit.js", "jazzkitLib")  (test/load-qml-lib.mjs)
+//
+// Types are JSDoc + `// @ts-check`: `npm run typecheck` (tsc --checkJs) verifies
+// them with no build step, so the file QML loads is the file we edit. The
+// external MuseScore shapes (MS.Part, MS.Score, …) are modelled in musescore.d.ts.
 
-// All JazzKit plugins require MuseScore 4.4+.
+/**
+ * One checkbox row for the comp-target dialog (our shape, not MuseScore's).
+ * @typedef {Object} TargetRow
+ * @property {string} label
+ * @property {string} instrumentId
+ * @property {number} staffIdx
+ * @property {boolean} isDrum
+ * @property {boolean} checked
+ */
+
+/**
+ * All JazzKit plugins require MuseScore 4.4+.
+ * @param {number} major
+ * @param {number} minor
+ * @returns {boolean}
+ */
 function isSupportedVersion(major, minor) {
     if (major <= 3) return false;
     if (major === 4 && minor < 4) return false;
     return true;
 }
 
-// Heuristic: is this part a chord/comping instrument we'd stamp a rhythm onto?
+/**
+ * Number of staves to iterate, tolerating the several names MuseScore versions
+ * expose for it (nstaves / nStaves / staffCount / staves.length); 16 as a last
+ * resort so a rename in a future version degrades to "process the first 16"
+ * rather than nothing.
+ * @param {MS.Score} score
+ * @returns {number}
+ */
+function countStaves(score) {
+    if (typeof score.nstaves === 'number') return score.nstaves;
+    if (typeof score.nStaves === 'number') return score.nStaves;
+    if (typeof score.staffCount === 'number') return score.staffCount;
+    if (score.staves && typeof score.staves.length === 'number') return score.staves.length;
+    return 16;
+}
+
+// Keywords that mark a chord/comping instrument we'd stamp a rhythm onto.
 var COMP_KEYWORDS = ["piano", "keyboard", "organ", "synth", "harpsichord", "celesta",
     "clavinet", "accordion", "rhodes", "wurl", "guitar", "bass",
     "vibraphone", "vibes", "marimba", "banjo", "ukulele", "mandolin", "harp", "comp", "komp"];
 
+/**
+ * Heuristic: is this part a chord/comping instrument?
+ * @param {MS.Part|null|undefined} part
+ * @returns {boolean}
+ */
 function isCompInstrument(part) {
     if (!part) return false;
     if (part.hasDrumStaff) return true;
@@ -28,21 +69,34 @@ function isCompInstrument(part) {
     return false;
 }
 
-// Select a single-staff range and confirm the selection actually landed on the
-// intended staff. The dispatched cmd()s act on curScore.selection, so a failed
-// selection must abort rather than run against the wrong staff.
+/**
+ * Select a single-staff range and confirm the selection actually landed on the
+ * intended staff. The dispatched cmd()s act on curScore.selection, so a failed
+ * selection must abort rather than run against the wrong staff.
+ * @param {MS.Score} curScore
+ * @param {number} startTick
+ * @param {number} endTick
+ * @param {number} staffIdx
+ * @returns {boolean}
+ */
 function selectStaffRange(curScore, startTick, endTick, staffIdx) {
     curScore.selection.selectRange(startTick, endTick, staffIdx, staffIdx + 1);
     var s = curScore.selection;
     return !!(s && s.isRange && s.startStaff === staffIdx);
 }
 
-// Build the checkbox rows for the comp-target dialog (shared by To Comp Slashes
-// and To Comp Cues): every comp instrument except the staff we're copying from,
-// each with its initial checked state. Pure — the .qml only feeds the result
-// into its ListModel. `parts` are MuseScore parts; `savedIds` is the remembered
-// enabled-id list, or null on first run (→ everything checked).
+/**
+ * Build the checkbox rows for the comp-target dialog (shared by To Comp Slashes
+ * and To Comp Cues): every comp instrument except the staff we're copying from,
+ * each with its initial checked state. Pure — the .qml only feeds the result
+ * into its ListModel.
+ * @param {MS.Part[]} parts
+ * @param {number} srcStaffIdx   Staff we're copying the rhythm from (never a target).
+ * @param {string[]|null} savedIds   Remembered enabled ids, or null on first run (→ all checked).
+ * @returns {TargetRow[]}
+ */
 function computeTargets(parts, srcStaffIdx, savedIds) {
+    /** @type {TargetRow[]} */
     var rows = [];
     for (var i = 0; i < parts.length; ++i) {
         var p = parts[i];
@@ -55,7 +109,7 @@ function computeTargets(parts, srcStaffIdx, savedIds) {
 
         var id = p.instrumentId || "";
         rows.push({
-            label: (p.longName && p.longName.length) ? p.longName : p.partName,
+            label: (p.longName && p.longName.length) ? p.longName : (p.partName || ""),
             instrumentId: id,
             staffIdx: partStart, // top staff of the part
             isDrum: p.hasDrumStaff ? true : false,
@@ -70,8 +124,12 @@ function computeTargets(parts, srcStaffIdx, savedIds) {
 // the file on save. The plugin shapes its own object; these handle the JSON and
 // the part/excerpt mirroring.
 
-// Read a JSON object previously stored with saveJsonTag. Returns the parsed
-// object, or null when there's no score / the tag is absent / it won't parse.
+/**
+ * Read a JSON object previously stored with saveJsonTag.
+ * @param {MS.Score|null|undefined} curScore
+ * @param {string} tag
+ * @returns {any}   Parsed object, or null when there's no score / the tag is absent / it won't parse.
+ */
 function loadJsonTag(curScore, tag) {
     if (!curScore) return null;
     var raw = curScore.metaTag(tag);
@@ -79,11 +137,17 @@ function loadJsonTag(curScore, tag) {
     try { return JSON.parse(raw); } catch (e) { return null; }
 }
 
-// Persist a JSON object as a score metatag, mirrored to every part/excerpt.
-// Reading a metatag already falls back to the master score, so writing from the
-// main score reaches every part; the mirror loop also overwrites any value a
-// part set on its own. (The API has no upward link from a part to the master, so
-// a change made while viewing a part cannot propagate and stays local to it.)
+/**
+ * Persist a JSON object as a score metatag, mirrored to every part/excerpt.
+ * Reading a metatag already falls back to the master score, so writing from the
+ * main score reaches every part; the mirror loop also overwrites any value a
+ * part set on its own. (The API has no upward link from a part to the master, so
+ * a change made while viewing a part cannot propagate and stays local to it.)
+ * @param {MS.Score|null|undefined} curScore
+ * @param {string} tag
+ * @param {any} obj
+ * @returns {void}
+ */
 function saveJsonTag(curScore, tag, obj) {
     if (!curScore) return;
     var val = JSON.stringify(obj);
@@ -97,8 +161,10 @@ function saveJsonTag(curScore, tag, obj) {
     }
 }
 
-var JazzKitExports = {
+// Exposed for the Node test loader; QML reaches the functions by name directly.
+var jazzkitLib = {
     isSupportedVersion: isSupportedVersion,
+    countStaves: countStaves,
     COMP_KEYWORDS: COMP_KEYWORDS,
     isCompInstrument: isCompInstrument,
     selectStaffRange: selectStaffRange,

@@ -25,8 +25,16 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   `fill_empty_slashes.qml` (Fill Empty Beats with Slashes), `line_breaks.qml`
   (Format Line Breaks), `manifest.json`.
 - `plugins/lib/*.js` — shared **pure** JS libraries (`jazzkit.js`,
-  `articulations.js`, `linebreaks.js`), imported into a `.qml` via
-  `import "lib/x.js" as X`.
+  `articulations.js`, `linebreaks.js`, `slashes.js`), imported into a `.qml` via
+  `import "lib/x.js" as X`. Typed with JSDoc + `// @ts-check` (no build — QML
+  loads these files as-is; `npm run typecheck` runs `tsc --checkJs`). Each ends
+  with a per-file `var <name>Lib = {…}` the Node loader reads (QML calls the
+  functions by name). The external MuseScore API shapes the libs consume are
+  modelled once in `plugins/lib/musescore.d.ts` (`declare namespace MS` — our
+  verified model, *not* authoritative; grep the source before trusting a shape).
+  tsconfig drops the DOM lib (else `MS`-less names like `Selection` collide).
+  Note: this types the **libs only** — `tsc` cannot read `.qml`, so JS embedded
+  in QML bindings/handlers stays unchecked.
 - `plugins/lib/*.qml` — shared **QML components** (widget trees), e.g.
   `CompTargetsDialog.qml` (the checkbox-list dialog for the comp plugins). Used
   via a directory import (`import "lib"`); not unit-testable (GUI-only). A
@@ -43,6 +51,7 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 
 ```bash
 npm test                              # unit-test plugins/lib (node test/run.mjs)
+npm run typecheck                     # JSDoc types on plugins/lib/*.js (tsc --checkJs, no build)
 node scripts/check-qml.mjs plugins/*.qml plugins/lib/*.qml
 scripts/sync.sh   # → run from Plugins menu (GUI)
 scripts/mslog.sh          # what it did

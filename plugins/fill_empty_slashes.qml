@@ -4,6 +4,7 @@ import MuseScore
 import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
+import "lib/slashes.js" as Slashes
 
 MuseScore {
     version: "0.1"
@@ -44,10 +45,13 @@ MuseScore {
     //
     // Rests that share a beat with a note (off-beat / sub-beat rests) are skipped:
     // that beat is not "without notes in voice 1", so it must stay as the user wrote it.
+    // Walk the score to read each measure's timesig + voice-1 rests as plain data
+    // (the effect part); the beat math and whole-beat alignment that decides the
+    // fillable regions live in the typed, unit-tested slashes.js.
     function collectEmptyRestRegions(selStart, selEnd, staffIdx)
     {
         var track = staffIdx * 4; // voice 1
-        var regions = [];
+        var measures = [];
 
         var cursor = curScore.newCursor();
         cursor.rewind(Cursor.SELECTION_START);
@@ -55,41 +59,28 @@ MuseScore {
 
         while (m && m.firstSegment && m.firstSegment.tick < selEnd)
         {
-            var mStart = m.firstSegment.tick;
             var ts = m.timesigNominal;
-            var d = ts.denominator;
-            var num = ts.numerator;
-            // Mirror slash-fill's beat unit: compound meters group in threes.
-            var n = (d > 4 && num % 3 === 0) ? 3 : 1;
-            var beat = Math.floor(ts.ticks * n / num);
-
+            var rests = [];
             for (var seg = m.firstSegment; seg; seg = seg.nextInMeasure)
             {
                 if (seg.segmentType !== Segment.ChordRest) continue;
-
                 var el = seg.elementAt(track);
                 if (!el || el.type !== Element.REST) continue;
-
-                var st = seg.tick;
-                var dur = el.duration.ticks;
-
-                // Clip to the selection.
-                var rs = Math.max(st, selStart);
-                var re = Math.min(st + dur, selEnd);
-                if (re <= rs) continue;
-
-                // Only whole beats: aligned to a beat boundary and a beat multiple.
-                if (beat <= 0) continue;
-                if ((rs - mStart) % beat !== 0) continue;
-                if ((re - rs) % beat !== 0) continue;
-
-                regions.push({ start: rs, end: re });
+                rests.push({ tick: seg.tick, durTicks: el.duration.ticks });
             }
+
+            measures.push({
+                mStart: m.firstSegment.tick,
+                numerator: ts.numerator,
+                denominator: ts.denominator,
+                measureTicks: ts.ticks,
+                rests: rests
+            });
 
             m = m.nextMeasure;
         }
 
-        return regions;
+        return Slashes.emptyRestRegions(measures, selStart, selEnd);
     }
 
 //=============================================================================

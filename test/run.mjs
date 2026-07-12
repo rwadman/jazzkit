@@ -2,6 +2,7 @@
 import "./articulations.test.mjs";
 import "./jazzkit.test.mjs";
 import "./linebreaks.test.mjs";
+import "./slashes.test.mjs";
 import { run } from "./harness.mjs";
 
 run();

@@ -49,16 +49,6 @@ MuseScore {
 
 
 
-    function arrayContains(arr, val)
-    {
-        for (var a in arr)
-        {
-            if (arr[a] === val) return true;
-        }
-        return false;
-    }
-
-
     function initialiseScoreChanges()
     {
         curScore.startCmd();
@@ -69,47 +59,14 @@ MuseScore {
         curScore.endCmd()
     }
 
-    function _getMaxStaves()
-    {
-        if (typeof curScore.nstaves === 'number') return curScore.nstaves;
-        if (typeof curScore.nStaves === 'number') return curScore.nStaves;
-        if (typeof curScore.staffCount === 'number') return curScore.staffCount;
-        if (curScore.staves && typeof curScore.staves.length === 'number') return curScore.staves.length;
-        return 16;
-    }
-
-    function _articSymbol(a)
-    {
-        if (!a) return "";
-        return a.symbol !== undefined ? a.symbol : (a.toString ? a.toString() : "");
-    }
-
-    // Resolve one articulation to a canonical SymId *name* string. Only QML can
-    // do this: `.symbol` may come back as a SymId enum value or as a name string
-    // (version-dependent — hence the dual matching the original code carried).
-    // The classification itself lives in the pure, unit-tested articulations.js.
-    function _canonicalName(a)
-    {
-        if (!a) return "";
-        var s = _articSymbol(a);
-        if (typeof s === "string") return s;
-        if (s === SymId.articMarcatoAbove) return "articMarcatoAbove";
-        if (s === SymId.articMarcatoBelow) return "articMarcatoBelow";
-        if (s === SymId.articStaccatAbove) return "articStaccatAbove";
-        if (s === SymId.articStaccatoAbove) return "articStaccatoAbove";
-        if (s === SymId.articStaccatBelow) return "articStaccatBelow";
-        if (s === SymId.articStaccatoBelow) return "articStaccatoBelow";
-        return "" + s;
-    }
-
+    // Symbol resolution (the version-dependent SymId/name matching) and the
+    // staccato candidate order now live in the typed, unit-tested articulations.js.
+    // SymId is a MuseScore global this .qml sees but a stateless JS library can't,
+    // so we pass it in.
     function _tryAddHiddenStaccato(el, cursor, wantAbove)
     {
-        // numeric SymIds we try (order: prefer above/below specific)
         var candidates = [];
-        try {
-            if (wantAbove) candidates = [SymId.articStaccatAbove, SymId.articStaccatoAbove, SymId.articStaccat, SymId.articStaccato];
-            else candidates = [SymId.articStaccatBelow, SymId.articStaccatoBelow, SymId.articStaccat, SymId.articStaccato];
-        } catch (e) { candidates = []; }
+        try { candidates = Articulations.staccatoCandidates(SymId, wantAbove); } catch (e) { candidates = []; }
 
         var articulations = el.articulations || [];
 
@@ -129,8 +86,7 @@ MuseScore {
             {
                 var a2 = articulations[k];
                 if (!a2) continue;
-                var sym2 = _articSymbol(a2);
-                if (sym2 == cand)
+                if (Articulations.articSymbol(a2) == cand)
                 {
                     try { a2.hidden = true; } catch (e) { }
                     try { a2.visible = false; } catch (e) { }
@@ -148,10 +104,7 @@ MuseScore {
         if (!el || el.type != Element.CHORD) return result;
 
         var articulations = el.articulations || [];
-        var names = [];
-        for (var i = 0; i < articulations.length; ++i) names.push(_canonicalName(articulations[i]));
-
-        var c = Articulations.classifyChord(names);
+        var c = Articulations.classifyChord(Articulations.chordNames(SymId, articulations));
         if (!c.hasMarcato) return result;
 
         if (c.staccatoIndices.length > 0)
@@ -237,7 +190,7 @@ MuseScore {
         var cursor = curScore.newCursor();
         var total = {added: 0, hidden: 0};
 
-        var maxStaves = _getMaxStaves();
+        var maxStaves = JazzKit.countStaves(curScore);
         for (var staffIdx = 0; staffIdx < maxStaves; ++staffIdx)
         {
             // pass the default voice processor (bound to the marcato/chord processor) so callers can override if needed

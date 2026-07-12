@@ -1,7 +1,7 @@
 import { test, eq } from "./harness.mjs";
 import { loadQmlLib } from "./load-qml-lib.mjs";
 
-const LB = loadQmlLib("../plugins/lib/linebreaks.js");
+const LB = loadQmlLib("../plugins/lib/linebreaks.js", "linebreaksLib");
 
 // A default single-bar box with no structural markings.
 function bar(over) { return Object.assign({ musicBars: 1, endsDouble: false, repeatEnd: false, repeatStart: false }, over); }
@@ -9,6 +9,33 @@ function bars(n, over) { const a = []; for (let i = 0; i < n; i++) a.push(bar(ov
 
 const NONE = { atDouble: false, atRepeats: false, everyN: 0, minBars: 1, maxBars: 0 };
 function opts(over) { return Object.assign({}, NONE, over); }
+
+// --- groupBoxes (measures → visual boxes) -----------------------------------
+
+test("groupBoxes: with no MM info every measure is its own box", () => {
+    eq(LB.groupBoxes([0, 1920, 3840], null), [
+        { firstIdx: 0, lastIdx: 0, musicBars: 1 },
+        { firstIdx: 1, lastIdx: 1, musicBars: 1 },
+        { firstIdx: 2, lastIdx: 2, musicBars: 1 },
+    ]);
+});
+
+test("groupBoxes: interior measures of a multirest merge into one box", () => {
+    // Box starts at ticks 0 and 5760; measures at 0,1920,3840 collapse to one box.
+    const groups = LB.groupBoxes([0, 1920, 3840, 5760], { 0: true, 5760: true });
+    eq(groups, [
+        { firstIdx: 0, lastIdx: 2, musicBars: 3 },
+        { firstIdx: 3, lastIdx: 3, musicBars: 1 },
+    ]);
+});
+
+test("groupBoxes: the first measure always starts a box even off-grid", () => {
+    // First tick isn't in boxStarts, but index 0 still opens a box.
+    eq(LB.groupBoxes([1920, 3840], { 3840: true }), [
+        { firstIdx: 0, lastIdx: 0, musicBars: 1 },
+        { firstIdx: 1, lastIdx: 1, musicBars: 1 },
+    ]);
+});
 
 // --- everyN grid ------------------------------------------------------------
 

@@ -1,7 +1,7 @@
 import { test, eq } from "./harness.mjs";
 import { loadQmlLib } from "./load-qml-lib.mjs";
 
-const JazzKit = loadQmlLib("../plugins/lib/jazzkit.js");
+const JazzKit = loadQmlLib("../plugins/lib/jazzkit.js", "jazzkitLib");
 
 // --- isSupportedVersion -----------------------------------------------------
 
@@ -11,6 +11,19 @@ test("version gate: MS3 and 4.3 rejected, 4.4+ accepted", () => {
     eq(JazzKit.isSupportedVersion(4, 4), true);
     eq(JazzKit.isSupportedVersion(4, 7), true);
     eq(JazzKit.isSupportedVersion(5, 0), true);
+});
+
+// --- countStaves ------------------------------------------------------------
+
+test("countStaves prefers nstaves, then the fallbacks, in order", () => {
+    eq(JazzKit.countStaves({ nstaves: 4, nStaves: 9, staffCount: 9 }), 4);
+    eq(JazzKit.countStaves({ nStaves: 5, staffCount: 9 }), 5);
+    eq(JazzKit.countStaves({ staffCount: 6 }), 6);
+    eq(JazzKit.countStaves({ staves: { length: 7 } }), 7);
+});
+
+test("countStaves falls back to 16 when nothing is exposed", () => {
+    eq(JazzKit.countStaves({}), 16);
 });
 
 // --- isCompInstrument -------------------------------------------------------

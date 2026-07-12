@@ -131,26 +131,26 @@ MuseScore {
     //   (each box counts as 1 for the "minimum bars per line" count)
     function buildBoxes(measures)
     {
+        // Read the visual-box start ticks off the MM (multimeasure-rest) walk, and
+        // the real measures' ticks; the grouping itself (which measures merge into
+        // one box) is the pure, unit-tested groupBoxes.
         var starts = {};
         var hasStarts = false;
         var mm = curScore.firstMeasureMM;
         while (mm) { starts[mm.tick.ticks] = true; hasStarts = true; mm = mm.nextMeasureMM; }
 
+        var ticks = [];
+        for (var i = 0; i < measures.length; ++i) ticks.push(measures[i].tick.ticks);
+
+        var groups = LineBreaks.groupBoxes(ticks, hasStarts ? starts : null);
         var boxes = [];
-        var cur = null;
-        for (var i = 0; i < measures.length; ++i)
+        for (var g = 0; g < groups.length; ++g)
         {
-            var m = measures[i];
-            if (cur === null || !hasStarts || starts[m.tick.ticks])
-            {
-                cur = { first: m, last: m, musicBars: 1 };
-                boxes.push(cur);
-            }
-            else
-            {
-                cur.last = m;
-                cur.musicBars += 1;
-            }
+            boxes.push({
+                first: measures[groups[g].firstIdx],
+                last: measures[groups[g].lastIdx],
+                musicBars: groups[g].musicBars
+            });
         }
         return boxes;
     }

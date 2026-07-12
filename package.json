@@ -4,6 +4,7 @@
   "description": "MuseScore 4 plugins that nudge notation toward jazz conventions.",
   "scripts": {
     "test": "node test/run.mjs",
+    "typecheck": "tsc -p tsconfig.json",
     "check": "node scripts/check-qml.mjs plugins/*.qml plugins/lib/*.qml"
   }
 }
