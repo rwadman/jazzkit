@@ -1,6 +1,6 @@
 # JazzKit
 
-A set of [MuseScore 4](https://musescore.org/) plugins that help me when arranging for jazz ensembles — comping slashes, cue copies, line-break formatting, and articulation cleanup.
+A set of [MuseScore 4](https://musescore.org/) plugins that help me when arranging for jazz ensembles.
 
 Developed on MuseScore 4.7.3 (requires 4.1+), macOS / Apple Silicon.
 
@@ -21,7 +21,7 @@ submenus, so they sort alphabetically by title):
 | **To Comp Slashes** | Copy the selected rhythm into voice 1 of chosen comping instruments as slash notation. Empty beats become rests. |
 | **Fill Empty Beats with Slashes** | Fill only the empty beats of voice 1 with slashes, leaving existing notes untouched. |
 | **Format Line Breaks** | Clear existing breaks and re-apply line breaks at double barlines, repeats, and every N bars. |
-| **Fix Marcato Staccatos** | Clean up marcato/staccato articulations toward jazz convention. |
+| **Fix Marcato Staccatos** | Add hidden staccattos to every marcato (^) note in the score, to make the playback more closely mimic the usual jazz articulation. |
 
 ## Install
 
