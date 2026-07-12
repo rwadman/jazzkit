@@ -26,7 +26,10 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   (Format Line Breaks), `manifest.json`.
 - `plugins/lib/*.js` — shared **pure** JS libraries (`jazzkit.js`,
   `articulations.js`, `linebreaks.js`), imported into a `.qml` via
-  `import "lib/x.js" as X`. A
+  `import "lib/x.js" as X`.
+- `plugins/lib/*.qml` — shared **QML components** (widget trees), e.g.
+  `CompTargetsDialog.qml` (the checkbox-list dialog for the comp plugins). Used
+  via a directory import (`import "lib"`); not unit-testable (GUI-only). A
   QML-imported JS library is stateless and can't see MuseScore globals
   (`curScore`, `cmd`, `SymId`), so lib functions take those as arguments — which
   is also what makes them unit-testable. `sync.sh` deploys `lib/` automatically.
@@ -40,7 +43,7 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 
 ```bash
 npm test                              # unit-test plugins/lib (node test/run.mjs)
-node scripts/check-qml.mjs plugins/*.qml
+node scripts/check-qml.mjs plugins/*.qml plugins/lib/*.qml
 scripts/sync.sh   # → run from Plugins menu (GUI)
 scripts/mslog.sh          # what it did
 python3 scripts/analyze-crash.py  # if it crashed

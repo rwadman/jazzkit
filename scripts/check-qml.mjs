@@ -36,11 +36,17 @@ for (const f of files) {
   const problems = [];
   if (brace !== 0) problems.push(`unbalanced braces (${brace > 0 ? "+" : ""}${brace})`);
   if (paren !== 0) problems.push(`unbalanced parens (${paren > 0 ? "+" : ""}${paren})`);
-  if (!/\bMuseScore\s*\{/.test(src)) problems.push("no MuseScore{} root element");
-  // menuPath is what nests the plugin under a submenu; warn if a titled plugin lacks it.
-  if (/\btitle\s*:/.test(src) && !/\bmenuPath\s*:/.test(src))
-    problems.push("has title: but no menuPath: (won't nest in a submenu)");
-  if (!/\bonRun\s*:/.test(src)) problems.push("no onRun: handler");
+
+  // Files under lib/ are reusable QML components, not plugins - they have no
+  // MuseScore{} root, menuPath, or onRun. Only the brace/paren check applies.
+  const isComponent = /(^|\/)lib\//.test(f);
+  if (!isComponent) {
+    if (!/\bMuseScore\s*\{/.test(src)) problems.push("no MuseScore{} root element");
+    // menuPath is what nests the plugin under a submenu; warn if a titled plugin lacks it.
+    if (/\btitle\s*:/.test(src) && !/\bmenuPath\s*:/.test(src))
+      problems.push("has title: but no menuPath: (won't nest in a submenu)");
+    if (!/\bonRun\s*:/.test(src)) problems.push("no onRun: handler");
+  }
 
   if (problems.length) {
     bad++;

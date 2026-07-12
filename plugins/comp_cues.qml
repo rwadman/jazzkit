@@ -1,12 +1,10 @@
 import QtQuick
-import QtQuick.Window
-import QtQuick.Layouts
-import QtQuick.Controls as Ctrl
 
 import MuseScore
 import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
+import "lib"
 
 MuseScore {
     version: "0.1"
@@ -73,8 +71,7 @@ MuseScore {
 
 //=============================================================================
 
-    // Shared, unit-tested helpers (plugins/lib/jazzkit.js).
-    function isCompInstrument(part) { return JazzKit.isCompInstrument(part); }
+    // Shared, unit-tested helper (plugins/lib/jazzkit.js).
     function selectStaffRange(startTick, endTick, staffIdx) {
         return JazzKit.selectStaffRange(curScore, startTick, endTick, staffIdx);
     }
@@ -84,30 +81,10 @@ MuseScore {
     function buildTargets()
     {
         targetsModel.clear();
-
-        var saved = loadEnabledIds(); // null on first ever run → default all checked
-        var parts = curScore.parts;
-        for (var i = 0; i < parts.length; ++i)
-        {
-            var p = parts[i];
-            if (!isCompInstrument(p)) continue;
-
-            var partStart = Math.floor(p.startTrack / 4);
-            var partEnd = Math.floor(p.endTrack / 4); // exclusive
-            // Never target the staff we're copying from.
-            if (srcStaffIdx >= partStart && srcStaffIdx < partEnd) continue;
-
-            var id = p.instrumentId || "";
-            var checked = saved ? (saved.indexOf(id) !== -1) : true;
-
-            targetsModel.append({
-                label: p.longName && p.longName.length ? p.longName : p.partName,
-                instrumentId: id,
-                staffIdx: partStart, // top staff of the part
-                isDrum: p.hasDrumStaff ? true : false,
-                checked: checked
-            });
-        }
+        // Which parts to offer + their initial checked state is pure, shared,
+        // unit-tested logic (plugins/lib/jazzkit.js); we only feed it into the model.
+        var rows = JazzKit.computeTargets(curScore.parts, srcStaffIdx, loadEnabledIds());
+        for (var i = 0; i < rows.length; ++i) targetsModel.append(rows[i]);
     }
 
 //=============================================================================
@@ -253,86 +230,25 @@ MuseScore {
 
 //=============================================================================
 
-    Window
+    CompTargetsDialog
     {
         id: optionsDialog
         title: qsTr("To Comp Cues")
-        width: 340
-        height: Math.min(120 + targetsModel.count * 34, 520)
-        modality: Qt.ApplicationModal
-        flags: Qt.Dialog
-        color: "#f0f0f0"
+        headerText: qsTr("Add a cue to:")
+        model: targetsModel
 
-        ColumnLayout
+        onApplied: (instrumentIds) =>
         {
-            anchors.fill: parent
-            anchors.margins: 16
-            spacing: 10
-
-            Ctrl.Label
+            if (instrumentIds.length === 0)
             {
-                text: qsTr("Add a cue to:")
-                color: "#202020"
+                showMessage(qsTr("Check at least one instrument."));
+                return;
             }
-
-            Repeater
-            {
-                model: targetsModel
-                delegate: Ctrl.CheckBox
-                {
-                    required property var model
-                    required property int index
-
-                    Layout.fillWidth: true
-                    checked: model.checked
-                    text: model.label
-                    onClicked: targetsModel.setProperty(index, "checked", checked)
-                    // Force dark label text; the default contentItem inherits a light
-                    // theme colour that is invisible on this dialog's background.
-                    contentItem: Text {
-                        text: model.label
-                        color: "#202020"
-                        verticalAlignment: Text.AlignVCenter
-                        leftPadding: parent.indicator.width + parent.spacing
-                    }
-                }
-            }
-
-            Item { Layout.fillHeight: true }
-
-            RowLayout
-            {
-                Layout.alignment: Qt.AlignRight
-                spacing: 8
-                Ctrl.Button
-                {
-                    text: qsTr("Cancel")
-                    onClicked: optionsDialog.close()
-                }
-                Ctrl.Button
-                {
-                    text: qsTr("Apply")
-                    onClicked:
-                    {
-                        var ids = [];
-                        for (var i = 0; i < targetsModel.count; ++i)
-                        {
-                            var r = targetsModel.get(i);
-                            if (r.checked) ids.push(r.instrumentId);
-                        }
-                        if (ids.length === 0)
-                        {
-                            showMessage(qsTr("Check at least one instrument."));
-                            return;
-                        }
-                        saveEnabledIds(ids);
-                        // Close BEFORE stamping so the notation view regains the active
-                        // context; otherwise paste / voice / slash have no handler.
-                        optionsDialog.close();
-                        stamp();
-                    }
-                }
-            }
+            saveEnabledIds(instrumentIds);
+            // Close BEFORE stamping so the notation view regains the active
+            // context; otherwise paste / voice / slash have no handler.
+            optionsDialog.close();
+            stamp();
         }
     }
 

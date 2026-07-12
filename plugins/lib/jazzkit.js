@@ -37,6 +37,34 @@ function selectStaffRange(curScore, startTick, endTick, staffIdx) {
     return !!(s && s.isRange && s.startStaff === staffIdx);
 }
 
+// Build the checkbox rows for the comp-target dialog (shared by To Comp Slashes
+// and To Comp Cues): every comp instrument except the staff we're copying from,
+// each with its initial checked state. Pure — the .qml only feeds the result
+// into its ListModel. `parts` are MuseScore parts; `savedIds` is the remembered
+// enabled-id list, or null on first run (→ everything checked).
+function computeTargets(parts, srcStaffIdx, savedIds) {
+    var rows = [];
+    for (var i = 0; i < parts.length; ++i) {
+        var p = parts[i];
+        if (!isCompInstrument(p)) continue;
+
+        var partStart = Math.floor(p.startTrack / 4);
+        var partEnd = Math.floor(p.endTrack / 4); // exclusive
+        // Never target the staff we're copying the rhythm from.
+        if (srcStaffIdx >= partStart && srcStaffIdx < partEnd) continue;
+
+        var id = p.instrumentId || "";
+        rows.push({
+            label: (p.longName && p.longName.length) ? p.longName : p.partName,
+            instrumentId: id,
+            staffIdx: partStart, // top staff of the part
+            isDrum: p.hasDrumStaff ? true : false,
+            checked: savedIds ? (savedIds.indexOf(id) !== -1) : true
+        });
+    }
+    return rows;
+}
+
 // --- Persisted dialog choices (MS's bundled QML has no Settings module) ------
 // Stored as a score metatag: recalled whenever the score is open and saved into
 // the file on save. The plugin shapes its own object; these handle the JSON and
@@ -74,6 +102,7 @@ var JazzKitExports = {
     COMP_KEYWORDS: COMP_KEYWORDS,
     isCompInstrument: isCompInstrument,
     selectStaffRange: selectStaffRange,
+    computeTargets: computeTargets,
     loadJsonTag: loadJsonTag,
     saveJsonTag: saveJsonTag
 };
