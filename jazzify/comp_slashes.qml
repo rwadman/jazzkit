@@ -8,8 +8,8 @@ import Muse.UiComponents
 
 MuseScore {
     version: "0.1"
-    title: "Rhythm to Comp Slashes"
-    menuPath: "Plugins.Jazzify.Rhythm to Comp Slashes"
+    title: "To Comp Slashes"
+    menuPath: "Plugins.To Comp Slashes"
     description: "Copy the selected rhythm into voice 1 of the chosen comping instruments (piano, bass, drums, …) as rhythmic slash notation. Beats without a note become rests. Choices are remembered per instrument."
     requiresScore: true
 
@@ -204,7 +204,7 @@ MuseScore {
     Window
     {
         id: optionsDialog
-        title: qsTr("Rhythm to Comp Slashes")
+        title: qsTr("To Comp Slashes")
         width: 340
         height: Math.min(120 + targetsModel.count * 34, 520)
         modality: Qt.ApplicationModal

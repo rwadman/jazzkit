@@ -8,8 +8,8 @@ import Muse.UiComponents
 
 MuseScore {
     version: "0.1"
-    title: "Copy as Cue Notes"
-    menuPath: "Plugins.Jazzify.Copy as Cue Notes"
+    title: "To Comp Cues"
+    menuPath: "Plugins.To Comp Cues"
     description: "Copy the selected passage into the chosen instruments. Pitched instruments receive a cue-size copy of the notes; drum/percussion parts receive a rhythmic comping cue (voice 3 slash notation, voice 1 time slashes). Choices are remembered per instrument."
     requiresScore: true
 
@@ -290,7 +290,7 @@ MuseScore {
     Window
     {
         id: optionsDialog
-        title: qsTr("Copy as Cue Notes")
+        title: qsTr("To Comp Cues")
         width: 340
         height: Math.min(120 + targetsModel.count * 34, 520)
         modality: Qt.ApplicationModal

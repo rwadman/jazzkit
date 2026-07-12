@@ -17,11 +17,12 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 
 ## Layout
 
-- `jazzify/` — the plugin. One `.qml` per menu action, sharing the
-  `menuPath: "Plugins.Jazzify.*"` prefix (groups them in a Jazzify submenu):
-  `jazzify.qml` (Fix Marcato Staccatos), `drum_comp_cue.qml` (Rhythm to Drum
-  Comping), `fill_empty_slashes.qml` (Fill Empty Beats with Slashes),
-  `manifest.json`.
+- `jazzify/` — the plugin. One `.qml` per menu action, each `menuPath:
+  "Plugins.<title>"` (MuseScore 4 flattens submenus, so entries sort
+  alphabetically by `title` under Plugins — no Jazzify submenu): `jazzify.qml`
+  (Fix Marcato Staccatos), `comp_cues.qml` (Comp Cues), `comp_slashes.qml` (Comp
+  Slashes), `fill_empty_slashes.qml` (Fill Empty Beats with Slashes),
+  `line_breaks.qml` (Format Line Breaks), `manifest.json`.
 - `DrumsetPatterns-main/` — third-party reference plugin; working drum-staff
   cursor examples. `test-plugin/` — throwaway.
 

@@ -78,9 +78,12 @@ or a real crash/log. Online plugin docs are thin and sometimes wrong for MS4 —
 
 ## Menus
 
-- `menuPath: "Plugins.Jazzify.My Action"` nests under a Jazzify submenu; multiple
-  `.qml` sharing the `"Plugins.Jazzify.*"` prefix group together. `setMenuPath`
-  logs "deprecated" but works in 4.7.
+- MuseScore 4 (4.7) **flattens `menuPath` submenus**: `"Plugins.Jazzify.My
+  Action"` does *not* nest under a Jazzify submenu — every plugin lands directly
+  under Plugins, sorted alphabetically by `title`. To keep related plugins
+  adjacent, give them a shared `title` prefix (e.g. "Comp Cues" / "Comp
+  Slashes"), not a shared menuPath segment. Use `menuPath: "Plugins.<title>"`.
+  `setMenuPath` logs "deprecated" but works in 4.7.
 - One `.qml` = one menu entry = one `MuseScore { onRun }`. Several independent
   actions → several `.qml` with a shared `menuPath` prefix.
 

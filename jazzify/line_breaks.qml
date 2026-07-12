@@ -9,7 +9,7 @@ import Muse.UiComponents
 MuseScore {
     version: "0.1"
     title: "Format Line Breaks"
-    menuPath: "Plugins.Jazzify.Format Line Breaks"
+    menuPath: "Plugins.Format Line Breaks"
     description: "Clear existing breaks in the selection (or whole score) and re-apply line breaks at double barlines, repeats and every N bars"
 
 //=============================================================================
