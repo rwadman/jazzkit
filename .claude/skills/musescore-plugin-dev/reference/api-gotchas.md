@@ -83,3 +83,25 @@ or a real crash/log. Online plugin docs are thin and sometimes wrong for MS4 —
   logs "deprecated" but works in 4.7.
 - One `.qml` = one menu entry = one `MuseScore { onRun }`. Several independent
   actions → several `.qml` with a shared `menuPath` prefix.
+
+## Dialogs + notation `cmd()` (focus/context trap)
+
+- A **`pluginType: "dialog"` plugin cannot dispatch notation-context `cmd()`s**
+  (`paste`, `slash-rhythm`, `voice-3`, …). MS hosts it in a modal
+  `ExtensionViewerDialog` that holds focus, so the notation view isn't the active
+  context and those actions have no enabled handler — log shows
+  `no one can handle the action: paste`. (Context-free actions like `copy` still
+  run, which is a misleading partial success.)
+- Fix: don't use `pluginType: "dialog"`. Make it a normal plugin that opens its
+  **own** `Window` (`import QtQuick.Window`; `modality: Qt.ApplicationModal`,
+  `flags: Qt.Dialog`), and on Apply **`window.close()` FIRST, then run the
+  `cmd()` sequence** — closing returns the notation view to the active context.
+  Pattern lives in `jazzify/comp_slashes.qml` and `line_breaks.qml`.
+- No bundled `Settings` module (checked MS 4.7 / Qt 6.10 — neither `QtCore` nor
+  `Qt.labs.settings` ships). Persist dialog choices as a **score metatag**
+  (`curScore.setMetaTag` + mirror to `curScore.excerpts[i].partScore`), per
+  `line_breaks.qml`. `FileIO` (`import FileIO 3.0`) is available if you need a
+  real file instead.
+- Muse.UiComponents controls render with light theme text; on a light custom
+  `Window` (`color:"#f0f0f0"`) force a dark `contentItem` or use
+  `QtQuick.Controls` with an explicit dark `color`.

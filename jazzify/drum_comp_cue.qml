@@ -7,7 +7,7 @@ MuseScore {
     version: "0.1"
     title: "Rhythm to Drum Comping"
     menuPath: "Plugins.Jazzify.Rhythm to Drum Comping"
-    description: "Copy the selected notes into the drum part as a rhythmic comping cue (voice 3, slash notation)"
+    description: "Copy the selected notes into the drum part as a rhythmic comping cue (voice 3, slash notation), and fill voice 1 across the region with time slashes"
 
 //=============================================================================
 
@@ -150,6 +150,18 @@ MuseScore {
             }
             cmd("delete");
         }
+
+        // 6. Fill voice 1 across the touched region with time slashes. Our paste/move
+        //    leaves voice 1 as fragmented rests; we can't restore its prior state because
+        //    the plugin API can't edit one voice in isolation (range ops hit every voice,
+        //    which would clobber the voice-3 comping). slash-fill uses the first all-rest
+        //    voice - here voice 1 - so it reads as "keep time" under the voice-3 accents.
+        if (!selectStaffRange(measureTick, endTick, drumStaffIdx))
+        {
+            showMessage(qsTr("Applied the comping cue, but could not fill voice 1 with slashes."));
+            return;
+        }
+        cmd("slash-fill");
     }
 
 //=============================================================================
