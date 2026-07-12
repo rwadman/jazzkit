@@ -96,7 +96,7 @@ MuseScore {
         var id = (part.instrumentId || "").toLowerCase();
         var kws = ["piano", "keyboard", "organ", "synth", "harpsichord", "celesta",
                    "clavinet", "accordion", "rhodes", "wurl", "guitar", "bass",
-                   "vibraphone", "vibes", "marimba", "banjo", "ukulele", "mandolin", "harp"];
+                   "vibraphone", "vibes", "marimba", "banjo", "ukulele", "mandolin", "harp", "comp", "komp"];
         for (var i = 0; i < kws.length; ++i)
             if (id.indexOf(kws[i]) !== -1) return true;
         return false;
