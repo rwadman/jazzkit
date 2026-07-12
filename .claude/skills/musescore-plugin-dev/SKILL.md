@@ -1,11 +1,11 @@
 ---
 name: musescore-plugin-dev
-description: Develop, run, and debug the Jazzify MuseScore 4 plugin (QML). Use when writing or changing a MuseScore plugin, verifying the plugin API / action codes, running a plugin in MuseScore, reading MuseScore logs, or analyzing a MuseScore crash dump caused by a plugin.
+description: Develop, run, and debug the JazzKit MuseScore 4 plugin (QML). Use when writing or changing a MuseScore plugin, verifying the plugin API / action codes, running a plugin in MuseScore, reading MuseScore logs, or analyzing a MuseScore crash dump caused by a plugin.
 ---
 
-# Developing the Jazzify MuseScore plugin
+# Developing the JazzKit MuseScore plugin
 
-Jazzify is a **MuseScore 4 plugin** in QML (`jazzify/*.qml`). It runs only inside
+JazzKit is a **MuseScore 4 plugin** in QML (`plugins/*.qml`). It runs only inside
 the MuseScore GUI — **MuseScore 4 has no CLI plugin runner**, so there is no
 headless way to execute a plugin. Loop: edit → check → sync → run in GUI → read
 log → (if crash) symbolicate dump.
@@ -23,9 +23,9 @@ Paths are relative to the repo root. Prereqs: MuseScore 4.4+ at
 
 ```bash
 # static-check QML (no real qmllint exists; catches silent-no-op syntax slips)
-node .claude/skills/musescore-plugin-dev/scripts/check-qml.mjs jazzify/*.qml
+node .claude/skills/musescore-plugin-dev/scripts/check-qml.mjs plugins/*.qml
 
-# copy plugin → ~/Documents/MuseScore4/Plugins/jazzify/
+# copy plugin → ~/Documents/MuseScore4/Plugins/JazzKit/
 .claude/skills/musescore-plugin-dev/scripts/sync.sh
 
 # newest MuseScore log, plugin-relevant lines (-f follow, -a all)
@@ -41,7 +41,7 @@ python3 .claude/skills/musescore-plugin-dev/scripts/analyze-crash.py
 ## Running the plugin (GUI only)
 
 Open a score (the drum-slash action needs a pitched staff + a drum staff), make a
-selection, then Plugins → Jazzify → *action*. Observe with `mslog.sh` — each step
+selection, then Plugins → *action*. Observe with `mslog.sh` — each step
 logs as `try call action: <code>`. An existing `.qml` is re-read each run; a
 **new** `.qml` needs a restart + one-time enable in Home > Plugins.
 

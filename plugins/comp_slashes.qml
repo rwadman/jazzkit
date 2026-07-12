@@ -26,7 +26,7 @@ MuseScore {
     {
         id: infoDialog
         visible: false
-        title: "Jazzify"
+        title: "JazzKit"
         text: ""
         onAccepted: { close(); }
     }
@@ -36,7 +36,7 @@ MuseScore {
 // on the score (same mechanism as line_breaks.qml — MS's bundled QML has no Settings
 // module). Recalls whenever the score is open and is saved into the file on save.
 
-    property string settingsTag: "jazzifyCompSlashes"
+    property string settingsTag: "jazzKitCompSlashes"
 
     function loadEnabledIds()
     {

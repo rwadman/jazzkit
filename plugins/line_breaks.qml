@@ -25,7 +25,7 @@ MuseScore {
     {
         id: infoDialog
         visible: false
-        title: "Jazzify"
+        title: "JazzKit"
         text: ""
         onAccepted: { close(); }
     }
@@ -37,7 +37,7 @@ MuseScore {
 // on the score as a metatag. That recalls them whenever the score is open (this
 // session or later) and saves them into the file when the score is saved.
 
-    property string settingsTag: "jazzifyLineBreaks"
+    property string settingsTag: "jazzKitLineBreaks"
 
     function loadSettings()
     {

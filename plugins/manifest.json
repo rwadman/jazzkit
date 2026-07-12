@@ -1,7 +1,7 @@
 {
-  "name": "Jazzify",
+  "name": "JazzKit",
   "version": "1.0.0",
-  "title": "Jazzify",
+  "title": "JazzKit",
   "description": "Make score align better with jazz conventions",
   "author": "User",
   "requires": "4.1.0",

@@ -26,7 +26,7 @@ MuseScore {
     {
         id: infoDialog
         visible: false
-        title: "Jazzify"
+        title: "JazzKit"
         text: ""
         onAccepted: { close(); }
     }
@@ -37,7 +37,7 @@ MuseScore {
 // QML has no Settings module). Recalls whenever the score is open, saved into the
 // file on save. Own tag so it is remembered independently of comp_slashes.
 
-    property string settingsTag: "jazzifyCueNotes"
+    property string settingsTag: "jazzKitCueNotes"
 
     function loadEnabledIds()
     {

@@ -78,10 +78,10 @@ or a real crash/log. Online plugin docs are thin and sometimes wrong for MS4 —
 
 ## Menus
 
-- MuseScore 4 (4.7) **flattens `menuPath` submenus**: `"Plugins.Jazzify.My
-  Action"` does *not* nest under a Jazzify submenu — every plugin lands directly
+- MuseScore 4 (4.7) **flattens `menuPath` submenus**: `"Plugins.MyGroup.My
+  Action"` does *not* nest under a MyGroup submenu — every plugin lands directly
   under Plugins, sorted alphabetically by `title`. To keep related plugins
-  adjacent, give them a shared `title` prefix (e.g. "Comp Cues" / "Comp
+  adjacent, give them a shared `title` prefix (e.g. "To Comp Cues" / "To Comp
   Slashes"), not a shared menuPath segment. Use `menuPath: "Plugins.<title>"`.
   `setMenuPath` logs "deprecated" but works in 4.7.
 - One `.qml` = one menu entry = one `MuseScore { onRun }`. Several independent
@@ -99,7 +99,7 @@ or a real crash/log. Online plugin docs are thin and sometimes wrong for MS4 —
   **own** `Window` (`import QtQuick.Window`; `modality: Qt.ApplicationModal`,
   `flags: Qt.Dialog`), and on Apply **`window.close()` FIRST, then run the
   `cmd()` sequence** — closing returns the notation view to the active context.
-  Pattern lives in `jazzify/comp_slashes.qml` and `line_breaks.qml`.
+  Pattern lives in `plugins/comp_slashes.qml` and `line_breaks.qml`.
 - No bundled `Settings` module (checked MS 4.7 / Qt 6.10 — neither `QtCore` nor
   `Qt.labs.settings` ships). Persist dialog choices as a **score metatag**
   (`curScore.setMetaTag` + mirror to `curScore.excerpts[i].partScore`), per

@@ -21,7 +21,7 @@ MuseScore {
     {
         id: infoDialog
         visible: false
-        title: "Jazzify"
+        title: "JazzKit"
         text: ""
         onAccepted: { close(); }
     }

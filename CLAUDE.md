@@ -1,4 +1,4 @@
-# Jazzify
+# JazzKit
 
 MuseScore 4 plugin(s) that nudge notation toward jazz conventions. QML, plugin
 API, MuseScore 4.4+ (developed on 4.7.3, macOS/Apple Silicon).
@@ -17,19 +17,20 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 
 ## Layout
 
-- `jazzify/` — the plugin. One `.qml` per menu action, each `menuPath:
-  "Plugins.<title>"` (MuseScore 4 flattens submenus, so entries sort
-  alphabetically by `title` under Plugins — no Jazzify submenu): `jazzify.qml`
-  (Fix Marcato Staccatos), `comp_cues.qml` (Comp Cues), `comp_slashes.qml` (Comp
-  Slashes), `fill_empty_slashes.qml` (Fill Empty Beats with Slashes),
-  `line_breaks.qml` (Format Line Breaks), `manifest.json`.
+- `plugins/` — the plugin source (deployed to MuseScore under the `JazzKit`
+  package name). One `.qml` per menu action, each `menuPath: "Plugins.<title>"`
+  (MuseScore 4 flattens submenus, so entries sort alphabetically by `title`
+  under Plugins — no submenu): `fix_marcato_staccatos.qml` (Fix Marcato
+  Staccatos), `comp_cues.qml` (To Comp Cues), `comp_slashes.qml` (To Comp Slashes),
+  `fill_empty_slashes.qml` (Fill Empty Beats with Slashes), `line_breaks.qml`
+  (Format Line Breaks), `manifest.json`.
 - `DrumsetPatterns-main/` — third-party reference plugin; working drum-staff
   cursor examples. `test-plugin/` — throwaway.
 
 ## Dev loop
 
 ```bash
-node .claude/skills/musescore-plugin-dev/scripts/check-qml.mjs jazzify/*.qml
+node .claude/skills/musescore-plugin-dev/scripts/check-qml.mjs plugins/*.qml
 .claude/skills/musescore-plugin-dev/scripts/sync.sh   # → run from Plugins menu (GUI)
 .claude/skills/musescore-plugin-dev/scripts/mslog.sh          # what it did
 python3 .claude/skills/musescore-plugin-dev/scripts/analyze-crash.py  # if it crashed

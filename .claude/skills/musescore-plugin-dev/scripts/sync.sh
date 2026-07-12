@@ -1,5 +1,5 @@
 #!/bin/bash
-# Copy the jazzify plugin into MuseScore 4's user plugin folder so MuseScore
+# Copy the plugin source (plugins/) into MuseScore 4's user plugin folder so MuseScore
 # picks it up. MuseScore re-reads a plugin's .qml on each run, but NEW plugin
 # files require a restart (or Home > Plugins > refresh) and must be enabled once
 # in the Plugin Manager (new plugins default to disabled).
@@ -8,8 +8,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
-SRC="$REPO_ROOT/jazzify"
-DEST="$HOME/Documents/MuseScore4/Plugins/jazzify"
+SRC="$REPO_ROOT/plugins"
+DEST="$HOME/Documents/MuseScore4/Plugins/JazzKit"
 
 if [ ! -d "$SRC" ]; then
   echo "Source plugin dir not found: $SRC" >&2

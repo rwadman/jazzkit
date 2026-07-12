@@ -261,7 +261,7 @@ MuseScore {
         versionError.open()
         return;
         }
-        console.log("Running Jazzify plugin v0.2 on MuseScore " + mscoreMajorVersion + "." + mscoreMinorVersion);
+        console.log("Running JazzKit plugin v0.2 on MuseScore " + mscoreMajorVersion + "." + mscoreMinorVersion);
         // Ensure marcato articulations have hidden staccatos
         ensureMarcatoHasHiddenStaccato();
 
