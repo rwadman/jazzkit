@@ -4,6 +4,7 @@ import MuseScore
 import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
+import "lib/commands.js" as Cmd
 import "lib"
 
 MuseScore {
@@ -16,20 +17,7 @@ MuseScore {
 //=============================================================================
 // Messaging
 
-    function showMessage(message)
-    {
-        infoDialog.text = message;
-        infoDialog.open();
-    }
-
-    MessageDialog
-    {
-        id: infoDialog
-        visible: false
-        title: "JazzKit"
-        text: ""
-        onAccepted: { close(); }
-    }
+    InfoDialog { id: infoDialog }
 
 //=============================================================================
 // Persisted choices: the instrumentIds enabled on the last run, stored as a metatag
@@ -70,13 +58,6 @@ MuseScore {
 
 //=============================================================================
 
-    // Shared, unit-tested helper (plugins/lib/jazzkit.js).
-    function selectStaffRange(startTick, endTick, staffIdx) {
-        return JazzKit.selectStaffRange(curScore, startTick, endTick, staffIdx);
-    }
-
-//=============================================================================
-
     function buildTargets()
     {
         targetsModel.clear();
@@ -110,35 +91,35 @@ MuseScore {
             var t = targets[j];
             if (t === srcStaffIdx) continue; // guarded in buildTargets, belt-and-braces
 
-            if (!selectStaffRange(measureTick, selEnd, srcStaffIdx))
+            if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, srcStaffIdx))
             {
-                showMessage(qsTr("Could not re-select the source notes. Some instruments may be unchanged."));
+                infoDialog.show(qsTr("Could not re-select the source notes. Some instruments may be unchanged."));
                 return;
             }
-            cmd("copy");
+            cmd(Cmd.COPY);
 
-            if (!selectStaffRange(measureTick, selEnd, t))
+            if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, t))
             {
-                showMessage(qsTr("Could not select a target staff. Some instruments may be unchanged."));
+                infoDialog.show(qsTr("Could not select a target staff. Some instruments may be unchanged."));
                 return;
             }
-            cmd("paste");
+            cmd(Cmd.PASTE);
 
-            if (!selectStaffRange(selStart, selEnd, t))
+            if (!JazzKit.selectStaffRange(curScore, selStart, selEnd, t))
             {
-                showMessage(qsTr("Pasted, but could not apply slash notation. Some instruments may be unchanged."));
+                infoDialog.show(qsTr("Pasted, but could not apply slash notation. Some instruments may be unchanged."));
                 return;
             }
-            cmd("slash-rhythm");
+            cmd(Cmd.SLASH_RHYTHM);
 
             if (selStart > measureTick)
             {
-                if (!selectStaffRange(measureTick, selStart, t))
+                if (!JazzKit.selectStaffRange(curScore, measureTick, selStart, t))
                 {
-                    showMessage(qsTr("Applied the rhythm, but could not clear the leading beats."));
+                    infoDialog.show(qsTr("Applied the rhythm, but could not clear the leading beats."));
                     return;
                 }
-                cmd("delete");
+                cmd(Cmd.DELETE);
             }
         }
     }
@@ -156,7 +137,7 @@ MuseScore {
         {
             if (instrumentIds.length === 0)
             {
-                showMessage(qsTr("Check at least one instrument."));
+                infoDialog.show(qsTr("Check at least one instrument."));
                 return;
             }
             saveEnabledIds(instrumentIds);
@@ -173,19 +154,19 @@ MuseScore {
     {
         if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
         {
-            showMessage(qsTr("This plugin is for MuseScore 4.4 or later"));
+            infoDialog.show(qsTr("This plugin is for MuseScore 4.4 or later"));
             return;
         }
 
         var sel = curScore.selection;
         if (!sel || !sel.isRange || sel.elements.length === 0)
         {
-            showMessage(qsTr("Please select a range of notes first."));
+            infoDialog.show(qsTr("Please select a range of notes first."));
             return;
         }
         if (sel.endStaff - sel.startStaff !== 1)
         {
-            showMessage(qsTr("Please select notes in a single staff only."));
+            infoDialog.show(qsTr("Please select notes in a single staff only."));
             return;
         }
 
@@ -204,7 +185,7 @@ MuseScore {
 
         if (targetsModel.count === 0)
         {
-            showMessage(qsTr("No comping instruments (piano, bass, drums, …) other than the selected staff were found."));
+            infoDialog.show(qsTr("No comping instruments (piano, bass, drums, …) other than the selected staff were found."));
             return;
         }
 

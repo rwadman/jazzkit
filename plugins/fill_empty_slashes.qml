@@ -5,6 +5,8 @@ import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
 import "lib/slashes.js" as Slashes
+import "lib/commands.js" as Cmd
+import "lib"
 
 MuseScore {
     version: "0.1"
@@ -14,27 +16,7 @@ MuseScore {
 
 //=============================================================================
 
-    function showMessage(message)
-    {
-        infoDialog.text = message;
-        infoDialog.open();
-    }
-
-    MessageDialog
-    {
-        id: infoDialog
-        visible: false
-        title: "JazzKit"
-        text: ""
-        onAccepted: { close(); }
-    }
-
-//=============================================================================
-
-    // Shared, unit-tested helper (plugins/lib/jazzkit.js).
-    function selectStaffRange(startTick, endTick, staffIdx) {
-        return JazzKit.selectStaffRange(curScore, startTick, endTick, staffIdx);
-    }
+    InfoDialog { id: infoDialog }
 
 //=============================================================================
 
@@ -90,13 +72,13 @@ MuseScore {
         var sel = curScore.selection;
         if (!sel || !sel.isRange || sel.elements.length === 0)
         {
-            showMessage(qsTr("Please select a range of notes first."));
+            infoDialog.show(qsTr("Please select a range of notes first."));
             return;
         }
 
         if (sel.endStaff - sel.startStaff !== 1)
         {
-            showMessage(qsTr("Please select notes in a single staff only."));
+            infoDialog.show(qsTr("Please select notes in a single staff only."));
             return;
         }
 
@@ -116,7 +98,7 @@ MuseScore {
 
         if (regions.length === 0)
         {
-            showMessage(qsTr("No empty beats in voice 1 to fill."));
+            infoDialog.show(qsTr("No empty beats in voice 1 to fill."));
             return;
         }
 
@@ -124,12 +106,12 @@ MuseScore {
         // steps; never wrap them in one startCmd). Re-select and verify before each.
         for (var i = 0; i < regions.length; ++i)
         {
-            if (!selectStaffRange(regions[i].start, regions[i].end, staffIdx))
+            if (!JazzKit.selectStaffRange(curScore, regions[i].start, regions[i].end, staffIdx))
             {
-                showMessage(qsTr("Could not select a region to fill. Some beats may be unfilled."));
+                infoDialog.show(qsTr("Could not select a region to fill. Some beats may be unfilled."));
                 return;
             }
-            cmd("slash-fill");
+            cmd(Cmd.SLASH_FILL);
         }
     }
 
@@ -139,7 +121,7 @@ MuseScore {
     {
         if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
         {
-            showMessage(qsTr("This plugin is for MuseScore 4.4 or later"));
+            infoDialog.show(qsTr("This plugin is for MuseScore 4.4 or later"));
             return;
         }
 

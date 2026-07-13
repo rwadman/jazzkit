@@ -35,9 +35,11 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   tsconfig drops the DOM lib (else `MS`-less names like `Selection` collide).
   Note: this types the **libs only** — `tsc` cannot read `.qml`, so JS embedded
   in QML bindings/handlers stays unchecked.
-- `plugins/lib/*.qml` — shared **QML components** (widget trees), e.g.
-  `CompTargetsDialog.qml` (the checkbox-list dialog for the comp plugins). Used
-  via a directory import (`import "lib"`); not unit-testable (GUI-only). A
+- `plugins/lib/*.qml` — shared **QML components** (widget trees):
+  `CompTargetsDialog.qml` (the checkbox-list dialog for the comp plugins) and
+  `InfoDialog.qml` (the "JazzKit says…" popup with a `show(msg)` method, used by
+  every plugin). Used via a directory import (`import "lib"`); not unit-testable
+  (GUI-only). A
   QML-imported JS library is stateless and can't see MuseScore globals
   (`curScore`, `cmd`, `SymId`), so lib functions take those as arguments — which
   is also what makes them unit-testable. `sync.sh` deploys `lib/` automatically.

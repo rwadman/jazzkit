@@ -7,6 +7,7 @@ import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
 import "lib/articulations.js" as Articulations
+import "lib"
 
 MuseScore {
     version: "0.2"
@@ -16,48 +17,9 @@ MuseScore {
 
 //=============================================================================
 
-    MessageDialog
-    {
-        id: versionError
-        visible: false
-        title: qsTr("Unsupported MuseScore Version")
-        text: qsTr("This plugin is for MuseScore 4.4 or later")
-        onAccepted: {
-            close();
-        }
-    }
+    InfoDialog { id: infoDialog }
 
 
-//=============================================================================
-
-    function showMessage(message)
-    {
-        infoDialog.text = message;
-        infoDialog.open();
-    }
-
-    MessageDialog
-    {
-        id: infoDialog
-        visible: false
-        title: "Hello world"
-        text: "someTextHere"
-        onAccepted: {
-            close();
-        }
-    }
-
-
-
-    function initialiseScoreChanges()
-    {
-        curScore.startCmd();
-    }
-
-    function finaliseScoreChanges()
-    {
-        curScore.endCmd()
-    }
 
     // Symbol resolution (the version-dependent SymId/name matching) and the
     // staccato candidate order now live in the typed, unit-tested articulations.js.
@@ -185,7 +147,7 @@ MuseScore {
 
     function ensureMarcatoHasHiddenStaccato()
     {
-        initialiseScoreChanges();
+        curScore.startCmd();
 
         var cursor = curScore.newCursor();
         var total = {added: 0, hidden: 0};
@@ -199,8 +161,8 @@ MuseScore {
             total.hidden += res.hidden;
         }
 
-        finaliseScoreChanges();
-        showMessage(qsTr("Added %1 hidden staccatos, hid %2 existing staccatos.").arg(total.added).arg(total.hidden));
+        curScore.endCmd();
+        infoDialog.show(qsTr("Added %1 hidden staccatos, hid %2 existing staccatos.").arg(total.added).arg(total.hidden));
     }
 
 
@@ -209,7 +171,7 @@ MuseScore {
 
         if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
         {
-        versionError.open()
+        infoDialog.show(qsTr("This plugin is for MuseScore 4.4 or later"));
         return;
         }
         console.log("Running JazzKit plugin v0.2 on MuseScore " + mscoreMajorVersion + "." + mscoreMinorVersion);
