@@ -2,3 +2,4 @@
 .mscore-src/
 logs/
 .env
+node_modules/

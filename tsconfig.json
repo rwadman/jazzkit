@@ -1,14 +1,18 @@
 {
-  "//": "Type-checks the pure JS libs via JSDoc + `// @ts-check` — no build, no emit. The .js files QML loads are the files we edit. `npm run typecheck`.",
-  "compilerOptions": {
-    "allowJs": true,
-    "checkJs": true,
-    "noEmit": true,
-    "target": "ES2017",
-    "lib": ["ES2017"],
-    "moduleResolution": "node",
-    "skipLibCheck": true,
-    "types": []
-  },
-  "include": ["plugins/lib/*.js", "plugins/lib/*.d.ts"]
+    "//": "Type-checks the pure JS libs via JSDoc + `// @ts-check` — no build, no emit. The .js files QML loads are the files we edit. `npm run typecheck`.",
+    "compilerOptions": {
+        "allowJs": true,
+        "checkJs": true,
+        "noEmit": true,
+        "target": "ES2017",
+        "lib": [
+            "ES2017"
+        ],
+        "skipLibCheck": true,
+        "types": []
+    },
+    "include": [
+        "plugins/lib/*.js",
+        "plugins/lib/*.d.ts"
+    ]
 }
