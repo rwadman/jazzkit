@@ -30,7 +30,7 @@ MuseScore {
 
     property string settingsTag: "jazzKitLineBreaks"
 
-    // JSON + excerpt mirroring live in the shared plugins/lib/jazzkit.js.
+    // JSON + excerpt mirroring live in the shared JazzKit/lib/jazzkit.js.
     function loadSettings()
     {
         var s = JazzKit.loadJsonTag(curScore, settingsTag);

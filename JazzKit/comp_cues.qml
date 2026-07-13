@@ -28,7 +28,7 @@ MuseScore {
     property string settingsTag: "jazzKitCueNotes"
 
     // null → first run, default all checked. JSON + excerpt mirroring live in
-    // the shared, unit-tested plugins/lib/jazzkit.js.
+    // the shared, unit-tested JazzKit/lib/jazzkit.js.
     function loadEnabledIds()
     {
         var s = JazzKit.loadJsonTag(curScore, settingsTag);
@@ -63,7 +63,7 @@ MuseScore {
     {
         targetsModel.clear();
         // Which parts to offer + their initial checked state is pure, shared,
-        // unit-tested logic (plugins/lib/jazzkit.js); we only feed it into the model.
+        // unit-tested logic (JazzKit/lib/jazzkit.js); we only feed it into the model.
         var rows = JazzKit.computeTargets(curScore.parts, srcStaffIdx, loadEnabledIds());
         for (var i = 0; i < rows.length; ++i) targetsModel.append(rows[i]);
     }

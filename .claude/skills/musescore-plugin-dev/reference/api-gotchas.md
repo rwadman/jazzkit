@@ -99,7 +99,7 @@ or a real crash/log. Online plugin docs are thin and sometimes wrong for MS4 —
   **own** `Window` (`import QtQuick.Window`; `modality: Qt.ApplicationModal`,
   `flags: Qt.Dialog`), and on Apply **`window.close()` FIRST, then run the
   `cmd()` sequence** — closing returns the notation view to the active context.
-  Pattern lives in `plugins/comp_slashes.qml` and `line_breaks.qml`.
+  Pattern lives in `JazzKit/comp_slashes.qml` and `line_breaks.qml`.
 - No bundled `Settings` module (checked MS 4.7 / Qt 6.10 — neither `QtCore` nor
   `Qt.labs.settings` ships). Persist dialog choices as a **score metatag**
   (`curScore.setMetaTag` + mirror to `curScore.excerpts[i].partScore`), per

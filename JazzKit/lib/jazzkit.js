@@ -6,7 +6,7 @@
 // library AND lets Node unit-test every function with plain fakes.
 //
 //   QML:   import "lib/jazzkit.js" as JazzKit   →  JazzKit.isCompInstrument(part)
-//   Node:  loadQmlLib("../plugins/lib/jazzkit.js", "jazzkitLib")  (test/load-qml-lib.mjs)
+//   Node:  loadQmlLib("../JazzKit/lib/jazzkit.js", "jazzkitLib")  (test/load-qml-lib.mjs)
 //
 // Types are JSDoc + `// @ts-check`: `npm run typecheck` (tsc --checkJs) verifies
 // them with no build step, so the file QML loads is the file we edit. The
