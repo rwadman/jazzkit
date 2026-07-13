@@ -4,6 +4,7 @@ import MuseScore
 import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
+import "lib/commands.js" as Cmd
 import "lib"
 
 MuseScore {
@@ -104,7 +105,7 @@ MuseScore {
             infoDialog.show(qsTr("Could not select a target staff. Some instruments may be unchanged."));
             return false;
         }
-        cmd("paste");
+        cmd(Cmd.PASTE);
 
         // Clear the dragged-in leading beats (voice 1) back to rests.
         if (selStart > measureTick)
@@ -114,7 +115,7 @@ MuseScore {
                 infoDialog.show(qsTr("Pasted, but could not clear the leading beats."));
                 return false;
             }
-            cmd("delete");
+            cmd(Cmd.DELETE);
         }
 
         makeCueSize(t, selStart, selEnd);
@@ -132,7 +133,7 @@ MuseScore {
             infoDialog.show(qsTr("Could not select the drum staff to paste into. Some instruments may be unchanged."));
             return false;
         }
-        cmd("paste");
+        cmd(Cmd.PASTE);
 
         // Move the pasted region to voice 3 (before the leading-beats cleanup — doing
         // the delete first left the re-selection incomplete, moving only part of it).
@@ -141,7 +142,7 @@ MuseScore {
             infoDialog.show(qsTr("Pasted into the drum staff, but could not re-select it to move to voice 3."));
             return false;
         }
-        cmd("voice-3");
+        cmd(Cmd.VOICE_3);
 
         // Rhythmic slash notation on the voice 3 drum notes.
         if (!JazzKit.selectStaffRange(curScore, selStart, selEnd, t))
@@ -149,7 +150,7 @@ MuseScore {
             infoDialog.show(qsTr("Moved to voice 3, but could not re-select the drum staff for slash notation."));
             return false;
         }
-        cmd("slash-rhythm");
+        cmd(Cmd.SLASH_RHYTHM);
 
         // Clear the leading beats we dragged in (still voice 1) back to rests; the
         // comping now lives in voice 3, outside this range.
@@ -160,7 +161,7 @@ MuseScore {
                 infoDialog.show(qsTr("Applied the comping cue, but could not clear the leading beats."));
                 return false;
             }
-            cmd("delete");
+            cmd(Cmd.DELETE);
         }
 
         // Fill voice 1 across the touched region with time slashes so it reads as
@@ -170,7 +171,7 @@ MuseScore {
             infoDialog.show(qsTr("Applied the comping cue, but could not fill voice 1 with slashes."));
             return false;
         }
-        cmd("slash-fill");
+        cmd(Cmd.SLASH_FILL);
         return true;
     }
 
@@ -201,7 +202,7 @@ MuseScore {
                 infoDialog.show(qsTr("Could not re-select the source notes. Some instruments may be unchanged."));
                 return;
             }
-            cmd("copy");
+            cmd(Cmd.COPY);
 
             var ok = targets[j].isDrum ? drumComp(t) : pitchedCue(t);
             if (!ok) return; // the branch already reported why

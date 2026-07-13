@@ -1,4 +1,6 @@
 import QtQuick
+
+import MuseScore
 import Muse.UiComponents
 
 // Shared "JazzKit says…" popup for all plugins: a MessageDialog with a show(msg)

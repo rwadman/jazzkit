@@ -4,6 +4,7 @@ import MuseScore
 import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
+import "lib/commands.js" as Cmd
 import "lib"
 
 MuseScore {
@@ -95,21 +96,21 @@ MuseScore {
                 infoDialog.show(qsTr("Could not re-select the source notes. Some instruments may be unchanged."));
                 return;
             }
-            cmd("copy");
+            cmd(Cmd.COPY);
 
             if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, t))
             {
                 infoDialog.show(qsTr("Could not select a target staff. Some instruments may be unchanged."));
                 return;
             }
-            cmd("paste");
+            cmd(Cmd.PASTE);
 
             if (!JazzKit.selectStaffRange(curScore, selStart, selEnd, t))
             {
                 infoDialog.show(qsTr("Pasted, but could not apply slash notation. Some instruments may be unchanged."));
                 return;
             }
-            cmd("slash-rhythm");
+            cmd(Cmd.SLASH_RHYTHM);
 
             if (selStart > measureTick)
             {
@@ -118,7 +119,7 @@ MuseScore {
                     infoDialog.show(qsTr("Applied the rhythm, but could not clear the leading beats."));
                     return;
                 }
-                cmd("delete");
+                cmd(Cmd.DELETE);
             }
         }
     }

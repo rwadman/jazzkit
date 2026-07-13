@@ -5,6 +5,7 @@ import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
 import "lib/slashes.js" as Slashes
+import "lib/commands.js" as Cmd
 import "lib"
 
 MuseScore {
@@ -110,7 +111,7 @@ MuseScore {
                 infoDialog.show(qsTr("Could not select a region to fill. Some beats may be unfilled."));
                 return;
             }
-            cmd("slash-fill");
+            cmd(Cmd.SLASH_FILL);
         }
     }
 
