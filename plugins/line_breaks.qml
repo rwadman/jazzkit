@@ -8,6 +8,7 @@ import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
 import "lib/linebreaks.js" as LineBreaks
+import "lib"
 
 MuseScore {
     version: "0.1"
@@ -18,20 +19,7 @@ MuseScore {
 //=============================================================================
 // Messaging
 
-    function showMessage(message)
-    {
-        infoDialog.text = message;
-        infoDialog.open();
-    }
-
-    MessageDialog
-    {
-        id: infoDialog
-        visible: false
-        title: "JazzKit"
-        text: ""
-        onAccepted: { close(); }
-    }
+    InfoDialog { id: infoDialog }
 
 //=============================================================================
 // Settings persistence
@@ -190,7 +178,7 @@ MuseScore {
         var measures = collectMeasures();
         if (measures.length === 0)
         {
-            showMessage(qsTr("No measures found to format."));
+            infoDialog.show(qsTr("No measures found to format."));
             return;
         }
 
@@ -225,7 +213,7 @@ MuseScore {
 
         curScore.endCmd();
 
-        showMessage(qsTr("Formatted %1 measures: cleared %2 break(s), added %3 line break(s).")
+        infoDialog.show(qsTr("Formatted %1 measures: cleared %2 break(s), added %3 line break(s).")
                     .arg(measures.length).arg(removed).arg(added));
     }
 
@@ -364,12 +352,12 @@ MuseScore {
     {
         if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
         {
-            showMessage(qsTr("This plugin is for MuseScore 4.4 or later"));
+            infoDialog.show(qsTr("This plugin is for MuseScore 4.4 or later"));
             return;
         }
         if (!curScore)
         {
-            showMessage(qsTr("Open a score first."));
+            infoDialog.show(qsTr("Open a score first."));
             return;
         }
         loadSettings();          // recall the last choices stored on this score
