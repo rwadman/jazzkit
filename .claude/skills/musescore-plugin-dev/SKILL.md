@@ -5,7 +5,7 @@ description: Develop, run, and debug the JazzKit MuseScore 4 plugin (QML). Use w
 
 # Developing the JazzKit MuseScore plugin
 
-JazzKit is a **MuseScore 4 plugin** in QML (`plugins/*.qml`). It runs only inside
+JazzKit is a **MuseScore 4 plugin** in QML (`JazzKit/*.qml`). It runs only inside
 the MuseScore GUI — **MuseScore 4 has no CLI plugin runner**, so there is no
 headless way to execute a plugin. Loop: edit → check → sync → run in GUI → read
 log → (if crash) symbolicate dump.
@@ -23,7 +23,7 @@ Paths are relative to the repo root. Prereqs: MuseScore 4.4+ at
 
 ```bash
 # static-check QML (no real qmllint exists; catches silent-no-op syntax slips)
-node scripts/check-qml.mjs plugins/*.qml
+node scripts/check-qml.mjs JazzKit/*.qml
 
 # copy plugin → ~/Documents/MuseScore4/Plugins/JazzKit/
 scripts/sync.sh

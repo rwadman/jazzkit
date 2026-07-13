@@ -25,9 +25,9 @@ submenus, so they sort alphabetically by title):
 
 ## Install
 
-1. Copy the contents of [`plugins/`](plugins/) into your MuseScore 4 plugins
-   folder (typically `~/Documents/MuseScore4/Plugins/`), keeping the `JazzKit`
-   package name.
+1. Copy the [`JazzKit/`](JazzKit/) folder into your MuseScore 4 plugins folder
+   (typically `~/Documents/MuseScore4/Plugins/`), so it lands at
+   `~/Documents/MuseScore4/Plugins/JazzKit/`.
 2. Restart MuseScore.
 3. Enable the plugins in **Home → Plugins** (one-time).
 
@@ -41,9 +41,9 @@ and [`CLAUDE.md`](CLAUDE.md) documents the dev loop.
 
 ```bash
 # lint QML (catches silent-no-op syntax slips)
-node scripts/check-qml.mjs plugins/*.qml
+node scripts/check-qml.mjs JazzKit/*.qml
 
-# deploy plugins/ → MuseScore's plugin folder (PLUGINS_FOLDER, or the default)
+# deploy JazzKit/ → MuseScore's plugin folder (PLUGINS_FOLDER, or the default)
 scripts/sync.sh
 
 # launch MuseScore with logging → logs/musescore-run.log

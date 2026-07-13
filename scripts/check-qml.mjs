@@ -5,7 +5,7 @@
 // mistakes here before syncing: unbalanced braces/parens, and missing required
 // top-level MuseScore{} keys.
 //
-// Usage:  node scripts/check-qml.mjs plugins/*.qml
+// Usage:  node scripts/check-qml.mjs JazzKit/*.qml
 import { readFileSync } from "node:fs";
 
 const files = process.argv.slice(2);

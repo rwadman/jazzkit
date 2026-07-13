@@ -1,7 +1,7 @@
 import { test, eq } from "./harness.mjs";
 import { loadQmlLib } from "./load-qml-lib.mjs";
 
-const LB = loadQmlLib("../plugins/lib/linebreaks.js", "linebreaksLib");
+const LB = loadQmlLib("../JazzKit/lib/linebreaks.js", "linebreaksLib");
 
 // A default single-bar box with no structural markings.
 function bar(over) { return Object.assign({ musicBars: 1, endsDouble: false, repeatEnd: false, repeatStart: false }, over); }

@@ -12,7 +12,7 @@
         "types": []
     },
     "include": [
-        "plugins/lib/*.js",
-        "plugins/lib/*.d.ts"
+        "JazzKit/lib/*.js",
+        "JazzKit/lib/*.d.ts"
     ]
 }

@@ -1,7 +1,7 @@
 import { test, eq } from "./harness.mjs";
 import { loadQmlLib } from "./load-qml-lib.mjs";
 
-const JazzKit = loadQmlLib("../plugins/lib/jazzkit.js", "jazzkitLib");
+const JazzKit = loadQmlLib("../JazzKit/lib/jazzkit.js", "jazzkitLib");
 
 // --- isSupportedVersion -----------------------------------------------------
 

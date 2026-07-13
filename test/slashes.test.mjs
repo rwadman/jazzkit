@@ -1,7 +1,7 @@
 import { test, eq } from "./harness.mjs";
 import { loadQmlLib } from "./load-qml-lib.mjs";
 
-const Slashes = loadQmlLib("../plugins/lib/slashes.js", "slashesLib");
+const Slashes = loadQmlLib("../JazzKit/lib/slashes.js", "slashesLib");
 
 // 4/4 with MuseScore's 480 ticks/quarter → 1920 ticks/measure, beat = 480.
 function measure(over) {

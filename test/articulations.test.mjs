@@ -1,7 +1,7 @@
 import { test, eq } from "./harness.mjs";
 import { loadQmlLib } from "./load-qml-lib.mjs";
 
-const Artic = loadQmlLib("../plugins/lib/articulations.js", "articulationsLib");
+const Artic = loadQmlLib("../JazzKit/lib/articulations.js", "articulationsLib");
 
 test("plain chord: no marcato, nothing to do", () => {
     const c = Artic.classifyChord(["articAccentAbove"]);
