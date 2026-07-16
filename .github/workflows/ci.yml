@@ -20,3 +20,8 @@ jobs:
         run: npm run check
       - name: Typecheck (JSDoc)
         run: npm run typecheck
+      - name: E2E acceptance recorded & fresh
+        # The GUI harness can't run headless; verify a passing run was recorded for
+        # the current effect/lib code (harness/acceptance.json). Re-run scripts/e2e.sh
+        # to refresh it when this fails.
+        run: npm run e2e:check
