@@ -5,6 +5,8 @@ import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
 import "lib/commands.js" as Cmd
+import "lib/comp.js" as Comp
+import "lib/effects.js" as Effects
 import "lib"
 
 MuseScore {
@@ -44,7 +46,8 @@ MuseScore {
 // score selection surviving user interaction with the checkboxes).
 
     property int selStart: 0
-    property int selEnd: 0
+    property int selEnd: 0            // raw cursor read (0 = wrapped at score end)
+    property int lastSegmentTick: 0   // for the wrap fallback (Comp.selectionGeometry)
     // Tick of the barline the selection starts in. Pasting a range anchors on the
     // first chordrest of the target range; an empty target measure holds only a
     // full-measure rest at the measure start, so a mid-measure paste finds no anchor
@@ -68,9 +71,23 @@ MuseScore {
     }
 
 //=============================================================================
+// Bundle the MuseScore globals the effect layer needs (a QML-imported JS lib
+// can't see them). The step sequencing lives in the pure, unit-tested comp.js;
+// this .qml only reads the selection, dispatches, and reports.
+
+    function effectCtx()
+    {
+        return {
+            curScore: curScore, cmd: cmd,
+            Cmd: Cmd, JazzKit: JazzKit, Comp: Comp, Element: Element
+        };
+    }
+
 // Stamp the captured rhythm into voice 1 of every chosen target. Runs only after
 // the options window is closed, so the notation view is the active context again —
 // otherwise the paste / slash-rhythm actions have no handler ("no one can handle").
+// Each cmd() runs standalone (no outer startCmd) so the score lays out between
+// steps — wrapping them together crashes MS (see api-gotchas).
 
     function stamp()
     {
@@ -82,46 +99,11 @@ MuseScore {
         }
         if (targets.length === 0) return; // nothing checked → no-op
 
-        // Per target: copy the source rhythm, paste into voice 1, slashify the real
-        // region, then clear the dragged-in leading beats back to rests. Each cmd()
-        // is standalone (no outer startCmd) so the score lays out between steps —
-        // wrapping them together crashes MS (see api-gotchas).
-        for (var j = 0; j < targets.length; ++j)
-        {
-            var t = targets[j];
-            if (t === srcStaffIdx) continue; // guarded in buildTargets, belt-and-braces
-
-            if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, srcStaffIdx))
-            {
-                infoDialog.show(qsTr("Could not re-select the source notes. Some instruments may be unchanged."));
-                return;
-            }
-            cmd(Cmd.COPY);
-
-            if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, t))
-            {
-                infoDialog.show(qsTr("Could not select a target staff. Some instruments may be unchanged."));
-                return;
-            }
-            cmd(Cmd.PASTE);
-
-            if (!JazzKit.selectStaffRange(curScore, selStart, selEnd, t))
-            {
-                infoDialog.show(qsTr("Pasted, but could not apply slash notation. Some instruments may be unchanged."));
-                return;
-            }
-            cmd(Cmd.SLASH_RHYTHM);
-
-            if (selStart > measureTick)
-            {
-                if (!JazzKit.selectStaffRange(curScore, measureTick, selStart, t))
-                {
-                    infoDialog.show(qsTr("Applied the rhythm, but could not clear the leading beats."));
-                    return;
-                }
-                cmd(Cmd.DELETE);
-            }
-        }
+        var res = Effects.compSlashes(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: measureTick,
+            lastSegmentTick: lastSegmentTick, srcStaffIdx: srcStaffIdx, targets: targets
+        });
+        if (res.error) infoDialog.show(qsTr(res.error));
     }
 
 //=============================================================================
@@ -177,9 +159,8 @@ MuseScore {
         selStart = cursor.tick;
         measureTick = cursor.measure.firstSegment.tick;
         cursor.rewind(Cursor.SELECTION_END);
-        selEnd = cursor.tick;
-        // rewind(SELECTION_END) wraps to tick 0 at the end of the score.
-        if (selEnd === 0) selEnd = curScore.lastSegment.tick + 1;
+        selEnd = cursor.tick;   // raw; Comp.selectionGeometry resolves the end-of-score wrap
+        lastSegmentTick = curScore.lastSegment.tick;
 
         buildTargets();
 
