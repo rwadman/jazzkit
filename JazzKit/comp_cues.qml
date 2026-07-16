@@ -5,6 +5,8 @@ import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
 import "lib/commands.js" as Cmd
+import "lib/comp.js" as Comp
+import "lib/effects.js" as Effects
 import "lib"
 
 MuseScore {
@@ -45,7 +47,8 @@ MuseScore {
 // score selection surviving user interaction with the checkboxes).
 
     property int selStart: 0
-    property int selEnd: 0
+    property int selEnd: 0            // raw cursor read (0 = wrapped at score end)
+    property int lastSegmentTick: 0   // for the wrap fallback (Comp.selectionGeometry)
     // Tick of the barline the selection starts in. Pasting a range anchors on the
     // first chordrest of the target range; an empty target measure holds only a
     // full-measure rest at the measure start, so a mid-measure paste finds no anchor
@@ -69,113 +72,19 @@ MuseScore {
     }
 
 //=============================================================================
+// Bundle the MuseScore globals the effect layer needs (a QML-imported JS lib
+// can't see them). The step sequencing — copy, paste, the leading-beat cleanup,
+// cue-size (pitched) vs voice-3 comping (drum) — lives in the pure, unit-tested
+// comp.js; this .qml only reads the selection, dispatches, and reports.
 
-    // Cue-size the pasted content on staffIdx across [startTick, endTick). No action
-    // code exists for "cue size" — it is the elements' `small` property (its API
-    // docstring is literally "Whether this element is cue size"). We walk voice 1
-    // (always populated after a paste) with a cursor and set small on each chord/rest
-    // and every notehead. Wrapped in one startCmd/endCmd (a single logical edit — not
-    // a nest of cmd()s, which is the crash case in api-gotchas).
-    function makeCueSize(staffIdx, startTick, endTick)
+    function effectCtx()
     {
-        var cursor = curScore.newCursor();
-        cursor.staffIdx = staffIdx;
-        cursor.voice = 0; // set track BEFORE rewind (rewindToTick uses the current track)
-        cursor.rewindToTick(startTick);
-
-        curScore.startCmd();
-        while (cursor.element && cursor.tick < endTick)
-        {
-            var e = cursor.element;
-            e.small = true;
-            if (e.type === Element.CHORD && e.notes)
-                for (var k = 0; k < e.notes.length; ++k) e.notes[k].small = true;
-            if (!cursor.next()) break;
-        }
-        curScore.endCmd();
+        return {
+            curScore: curScore, cmd: cmd,
+            Cmd: Cmd, JazzKit: JazzKit, Comp: Comp, Element: Element
+        };
     }
 
-//=============================================================================
-
-    // Pitched target: paste a cue-size copy of the source notes into voice 1.
-    function pitchedCue(t)
-    {
-        if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, t))
-        {
-            infoDialog.show(qsTr("Could not select a target staff. Some instruments may be unchanged."));
-            return false;
-        }
-        cmd(Cmd.PASTE);
-
-        // Clear the dragged-in leading beats (voice 1) back to rests.
-        if (selStart > measureTick)
-        {
-            if (!JazzKit.selectStaffRange(curScore, measureTick, selStart, t))
-            {
-                infoDialog.show(qsTr("Pasted, but could not clear the leading beats."));
-                return false;
-            }
-            cmd(Cmd.DELETE);
-        }
-
-        makeCueSize(t, selStart, selEnd);
-        return true;
-    }
-
-    // Drum/percussion target: paste as a rhythmic comping cue — voice 3 slash
-    // notation over the passage, voice 1 filled with time slashes (see api-gotchas
-    // for why each cmd() runs standalone rather than under one startCmd).
-    function drumComp(t)
-    {
-        // Paste converts the pitched notes to drum notes.
-        if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, t))
-        {
-            infoDialog.show(qsTr("Could not select the drum staff to paste into. Some instruments may be unchanged."));
-            return false;
-        }
-        cmd(Cmd.PASTE);
-
-        // Move the pasted region to voice 3 (before the leading-beats cleanup — doing
-        // the delete first left the re-selection incomplete, moving only part of it).
-        if (!JazzKit.selectStaffRange(curScore, selStart, selEnd, t))
-        {
-            infoDialog.show(qsTr("Pasted into the drum staff, but could not re-select it to move to voice 3."));
-            return false;
-        }
-        cmd(Cmd.VOICE_3);
-
-        // Rhythmic slash notation on the voice 3 drum notes.
-        if (!JazzKit.selectStaffRange(curScore, selStart, selEnd, t))
-        {
-            infoDialog.show(qsTr("Moved to voice 3, but could not re-select the drum staff for slash notation."));
-            return false;
-        }
-        cmd(Cmd.SLASH_RHYTHM);
-
-        // Clear the leading beats we dragged in (still voice 1) back to rests; the
-        // comping now lives in voice 3, outside this range.
-        if (selStart > measureTick)
-        {
-            if (!JazzKit.selectStaffRange(curScore, measureTick, selStart, t))
-            {
-                infoDialog.show(qsTr("Applied the comping cue, but could not clear the leading beats."));
-                return false;
-            }
-            cmd(Cmd.DELETE);
-        }
-
-        // Fill voice 1 across the touched region with time slashes so it reads as
-        // "keep time" under the voice-3 accents.
-        if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, t))
-        {
-            infoDialog.show(qsTr("Applied the comping cue, but could not fill voice 1 with slashes."));
-            return false;
-        }
-        cmd(Cmd.SLASH_FILL);
-        return true;
-    }
-
-//=============================================================================
 // Stamp the captured passage into every chosen target. Runs only after the options
 // window is closed, so the notation view is the active context again — otherwise the
 // paste / voice / slash actions have no handler ("no one can handle").
@@ -190,23 +99,11 @@ MuseScore {
         }
         if (targets.length === 0) return; // nothing checked → no-op
 
-        for (var j = 0; j < targets.length; ++j)
-        {
-            var t = targets[j].staffIdx;
-            if (t === srcStaffIdx) continue; // guarded in buildTargets, belt-and-braces
-
-            // Copy the source, extended left to the measure start so the paste can
-            // anchor on the target's full-measure rest (which sits at the measure start).
-            if (!JazzKit.selectStaffRange(curScore, measureTick, selEnd, srcStaffIdx))
-            {
-                infoDialog.show(qsTr("Could not re-select the source notes. Some instruments may be unchanged."));
-                return;
-            }
-            cmd(Cmd.COPY);
-
-            var ok = targets[j].isDrum ? drumComp(t) : pitchedCue(t);
-            if (!ok) return; // the branch already reported why
-        }
+        var res = Effects.compCues(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: measureTick,
+            lastSegmentTick: lastSegmentTick, srcStaffIdx: srcStaffIdx, targets: targets
+        });
+        if (res.error) infoDialog.show(qsTr(res.error));
     }
 
 //=============================================================================
@@ -262,9 +159,8 @@ MuseScore {
         selStart = cursor.tick;
         measureTick = cursor.measure.firstSegment.tick;
         cursor.rewind(Cursor.SELECTION_END);
-        selEnd = cursor.tick;
-        // rewind(SELECTION_END) wraps to tick 0 at the end of the score.
-        if (selEnd === 0) selEnd = curScore.lastSegment.tick + 1;
+        selEnd = cursor.tick;   // raw; Comp.selectionGeometry resolves the end-of-score wrap
+        lastSegmentTick = curScore.lastSegment.tick;
 
         buildTargets();
 

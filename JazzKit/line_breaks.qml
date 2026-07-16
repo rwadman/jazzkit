@@ -8,6 +8,7 @@ import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
 import "lib/linebreaks.js" as LineBreaks
+import "lib/effects.js" as Effects
 import "lib"
 
 MuseScore {
@@ -173,6 +174,18 @@ MuseScore {
 //=============================================================================
 // Apply
 
+    // Bundle the MuseScore globals the effect layer needs (a QML-imported JS lib
+    // can't see them). The placement algorithm is the pure, unit-tested
+    // LineBreaks.computeBreaks (via computeBoxBreaks); Effects.applyLineBreaks only
+    // clears the existing breaks and attaches the new ones.
+    function effectCtx()
+    {
+        return {
+            curScore: curScore, newElement: newElement,
+            Element: Element, LayoutBreak: LayoutBreak
+        };
+    }
+
     function applyLineBreaks(opts)
     {
         var measures = collectMeasures();
@@ -185,36 +198,10 @@ MuseScore {
         var boxes = buildBoxes(measures);
         var breakMeasures = computeBoxBreaks(boxes, opts);
 
-        curScore.startCmd();
-
-        // 1. Clear every existing layout break (line, page, section) in range.
-        var removed = 0;
-        for (var i = 0; i < measures.length; ++i)
-        {
-            var els = measures[i].elements;
-            var toRemove = [];
-            for (var j = 0; j < els.length; ++j)
-            {
-                var e = els[j];
-                if (e && e.type === Element.LAYOUT_BREAK) toRemove.push(e);
-            }
-            for (var k = 0; k < toRemove.length; ++k) { measures[i].remove(toRemove[k]); ++removed; }
-        }
-
-        // 2. Add the new line breaks.
-        var added = 0;
-        for (var i = 0; i < breakMeasures.length; ++i)
-        {
-            var lb = newElement(Element.LAYOUT_BREAK);
-            lb.layoutBreakType = LayoutBreak.LINE;
-            breakMeasures[i].add(lb);
-            ++added;
-        }
-
-        curScore.endCmd();
+        var res = Effects.applyLineBreaks(effectCtx(), measures, breakMeasures);
 
         infoDialog.show(qsTr("Formatted %1 measures: cleared %2 break(s), added %3 line break(s).")
-                    .arg(measures.length).arg(removed).arg(added));
+                    .arg(measures.length).arg(res.removed).arg(res.added));
     }
 
 //=============================================================================
