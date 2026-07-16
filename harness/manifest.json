@@ -1,0 +1,9 @@
+{
+  "name": "JazzKitTest",
+  "version": "1.0.0",
+  "title": "JazzKit Test",
+  "description": "Dev-only test harness for JazzKit — not for end users.",
+  "author": "Rikard Wadman",
+  "requires": "4.1.0",
+  "category": "DEVELOPMENT"
+}

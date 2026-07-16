@@ -16,7 +16,7 @@ echo "== $LOG ==" >&2
 
 # Lines worth seeing: action dispatches, Cursor/selection warnings, plugin API
 # messages, asserts/errors. Skip the audio-sampler and keyboard-layout spam.
-FILTER='doDispatch|Cursor::|selection|Selection|PluginAPI|ASSERT|WARN|ERROR|extensions/v1|slash|voice'
+FILTER='doDispatch|Cursor::|selection|Selection|PluginAPI|ASSERT|WARN|ERROR|extensions/v1|slash|voice|JazzKitHarness'
 NOISE='MuseSampler|nativeKeycode|Failed to translate|Host requires authentication|FluidSynth|SoundFont'
 
 case "${1:-}" in

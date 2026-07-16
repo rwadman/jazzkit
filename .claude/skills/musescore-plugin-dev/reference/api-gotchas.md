@@ -27,6 +27,110 @@ or a real crash/log. Online plugin docs are thin and sometimes wrong for MS4 —
   `slash-fill`; "Voice 3" → `voice-3`; swap voices 1&3 → `voice-x13`.
 - A dispatched `cmd()` acts on `curScore.selection`.
 
+## Not every menu action is plugin-dispatchable (`cmd()` vs `command://`)
+
+- MS4.7 routes some notation actions through a newer `muse::rcommand` layer:
+  `undo`, `redo`, `copy`, `cut`, `paste`, `delete`, `pitch-up/down`, `move-*` are
+  defined as `command://notation/<name>` (`src/notationscene/notationcommands.h`).
+- **`undo` is NOT reachable from a plugin.** `cmd("undo")` → log
+  `not a registered action: undo`; `cmd("command://notation/undo")` → same (`not a
+  registered action: 'command://notation/undo'`). Verified this session. There is
+  **no plugin API to undo** — plan effects/tests around that (reset by re-reading a
+  fixture or applying the inverse edit, not by undo).
+- `paste`/`delete`/`pitch-up` *do* dispatch under their short codes (dual-registered
+  as plain action codes too) — but don't assume a menu action is dispatchable; probe
+  it. `try call action: X` in the log means it reached a handler; `not a registered
+  action` means no.
+- **`pitch-up`/`pitch-down` need a single selected *note element*, not a range.** On
+  a range the handler routes to `moveSelection(Up)` and hits
+  `ASSERT ... MoveDirection::Left == d || Right == d` (`notationinteraction.cpp`).
+  Select one note with `curScore.selection.select(note)` (not `selectRange`).
+
+## Creating / loading scores from a plugin (half-implemented in MS4)
+
+- `newScore(name, part, measures)` builds a `Score` object but its "open the score"
+  step is `NOT_IMPLEMENTED` (`api/v1/qmlpluginapi.cpp`) — the new score never becomes
+  `curScore`/active, so `cmd()` can't target it. Usable only for direct-API cursor
+  writes on the returned object, not `cmd()`-driven effects.
+- `readScore(name, /*noninteractive*/ true)` → `"Noninteractive flag is not yet
+  implemented"` → **returns `nullptr`**. `readScore(name, false)` opens the file in a
+  **new window** (interactive) and returns it.
+- Upshot for automated testing: there is no silent/headless score load+drive. A test
+  harness must drive a fixture the **user has open**; it can select regions, run
+  effects via `cmd()`, and read results off the API (all confirmed working) — but it
+  can't undo, so isolate cases on independent regions and discard the fixture after.
+
+## `appendPart` a percussion instrument → async mixer crash
+
+- `curScore.appendPart(id)` works for pitched instruments, but appending a
+  **percussion/drumset** part makes MuseScore async-load a heavy Muse Hub sampler
+  ("Big Kit") and the audio mixer then **crashes** — `analyze-crash.py` on the dump
+  shows `MixerPanelModel::onTrackAdded → resolveInsertIndex →
+  Part::instrumentTrackIdList` (verified this session with the test harness). The
+  crash is *after* the plugin finishes (all `cmd()`s dispatch fine) — it's the async
+  mixer catching up on the added track, not the effect.
+- **Fix: append the percussion part, then YIELD to the event loop before doing
+  anything else.** The crash is a *race*, not a hard incompatibility — the manual
+  Instruments dialog adds a drumset fine because it returns to idle and lets the
+  mixer's async `onTrackAdded` slot run against a settled score. In a plugin, do the
+  same: `appendPart` in `onRun`, then **return** and continue in a one-shot `Timer`
+  (interval ~800 ms) — the event loop drains the mixer update while idle, and the
+  rest of the run proceeds without the crash. (Verified in the test harness: adding
+  the drum staff up front + a `settleTimer` before running any case.)
+- A **busy-wait `sleep` does NOT work** — `onRun` is synchronous JS on the main
+  thread, so spinning there blocks the very thread that must drain the mixer update.
+  You have to actually return from `onRun` (Timer/`Qt.callLater`), not sleep.
+- Appending many *pitched* parts interleaved with `cmd()`s is fine (they init on the
+  light MS Basic soundfont); only the percussion track-add needs the yield. Also
+  avoid `removeParts` churn while samplers are still initializing — leave the
+  throwaway fixture and close unsaved.
+
+## CLI / headless via `--test-case` (autobot) — how far it goes (MS 4.7.3)
+
+Verified this session by running `mscore --test-case <script.js>` and reading the log.
+
+- **`--test-case <file>` runs a JS "autobot" script from the CLI** and **exits 0 on
+  finish / non-zero on a failed step** (`consoleapp.cpp processTestflow`:
+  `qApp->exit(ret.code())`). `api.autobot.fatal(msg)`/`error(msg)` fail the run; a
+  bare `throw` inside a step also fails it — but a throw in `main()` body is only
+  logged and still exits 0. Wrapper: `scripts/run-testflow.sh`.
+- **It's `ConsoleApp` mode, always** — `--test-case` hard-sets it
+  (`commandlineparser.cpp`); the GUI path never processes scripts. The macOS bundle
+  ships only the `cocoa` Qt platform (no `offscreen`), so a window still opens.
+- **Namespace is `api.autobot`** on 4.7.3 (`api.testflow` is the newer rename; absent
+  here). Present: `api.{log,autobot,dispatcher,navigation,interactive,context,
+  filesystem,process}`. **Absent: `api.engraving` and `api.shortcuts`.**
+- **A plugin IS dispatchable from a script**: `api.dispatcher.dispatch(
+  "action://extensions/v1/<pkg-lowercased-path>/<file>.qml?action=main")` runs the
+  legacy plugin's `onRun` (extensions load in console mode). The plugin **must be
+  enabled once in the GUI** first, else dispatch pops an "enable it?" dialog that
+  fails in console mode.
+- **FileIO is sandboxed**: writes to `/tmp` are blocked (`apiv1::isPathAllowed`).
+  Allowed: `~/Documents/MuseScore4[/…]` and `FileIO.tempPath()` (== `$TMPDIR`). Use
+  `marker.tempPath() + "/x.txt"` to hand results back to a shell wrapper.
+- **THE WALL: no current notation in ConsoleApp → `curScore` is null.**
+  `PluginAPI::currentScore()` = `context()->currentNotation()`, which is a
+  GUI-session concept. `api.autobot.openProject(name)` (resolves `name` under
+  `userDataPath()/…TestingFiles`) returns `true` and loads the file, but it never
+  becomes the current notation, so a dispatched plugin sees `curScore == null` even
+  after long async waits. `newScore()` makes an object but not current either
+  (`writeScore` then fails: "Only writing the selected score is currently supported").
+  ⇒ **score-editing plugins (anything needing `curScore`/`cmd()`) can't run against a
+  real score from the CLI on 4.7.3.** The bundled `autobotscripts/TC*` that DO edit
+  scores rely on `api.shortcuts`/navigation and are meant for the in-app GUI Autobot
+  panel, not `--test-case`. CLI is usable only for plugin logic that needs no score.
+- **No CLI→GUI bridge.** In ConsoleApp mode the UI isn't built at all: navigation
+  fails with `not found section with name: TopTool`, so you can't even drive the
+  New-Score dialog to *create* a score. `Testflow::execScript` supports a `GuiApp`
+  branch (full window/nav/shortcuts) — but it's only invoked from `consoleapp.cpp`
+  (ConsoleApp); the GUI runs scripts only via the manual Diagnostics ▸ Testflow panel
+  (`runScript`), and there is no startup/config hook to auto-run one. Verified on
+  4.7.4. Net: on 4.7.x there is **no fully-automated path to exercise score effects
+  outside the GUI plugin menu** (one click). Automated CI = Node unit tests of the
+  pure `lib/` logic; effect verification stays the GUI harness. A future MuseScore
+  that registers `MuseApi.Engraving` in the script engine *and* sets a current
+  notation in console mode could unlock headless — re-probe with `smoke.js` then.
+
 ## Selection
 
 - `selectRange(startTick, endTick, startStaff, endStaff)`: **`endTick` and
