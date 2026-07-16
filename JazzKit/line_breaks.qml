@@ -15,6 +15,7 @@ MuseScore {
     version: "0.1"
     title: "Format Line Breaks"
     menuPath: "Plugins.Format Line Breaks"
+    categoryCode: "JazzKit"
     description: "Clear existing breaks in the selection (or whole score) and re-apply line breaks at double barlines, repeats and every N bars"
 
 //=============================================================================

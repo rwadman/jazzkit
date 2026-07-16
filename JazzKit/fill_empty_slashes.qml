@@ -13,6 +13,7 @@ MuseScore {
     version: "0.1"
     title: "Fill Empty Beats with Slashes"
     menuPath: "Plugins.Fill Empty Beats with Slashes"
+    categoryCode: "JazzKit"
     description: "Like Fill with Slashes, but only fills the beats of voice 1 that have no notes — existing voice 1 notes are left untouched."
 
 //=============================================================================

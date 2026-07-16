@@ -182,12 +182,26 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
 
 ## Menus
 
-- MuseScore 4 (4.7) **flattens `menuPath` submenus**: `"Plugins.MyGroup.My
-  Action"` does *not* nest under a MyGroup submenu — every plugin lands directly
-  under Plugins, sorted alphabetically by `title`. To keep related plugins
-  adjacent, give them a shared `title` prefix (e.g. "To Comp Cues" / "To Comp
-  Slashes"), not a shared menuPath segment. Use `menuPath: "Plugins.<title>"`.
-  `setMenuPath` logs "deprecated" but works in 4.7.
+- **`menuPath` is IGNORED by the MU4.4+ extensions loader.** The legacy loader
+  (`muse/framework/extensions/internal/legacy/extpluginsloader.cpp`) parses each
+  `.qml` header for `title`, `version`, `requiresScore`, `pluginType`, and
+  `categoryCode` — it never reads `menuPath`. So `"Plugins.MyGroup.My Action"`
+  buys no nesting; a plugin with no `categoryCode` lands flat under Plugins,
+  sorted alphabetically by `title`. Keep `menuPath: "Plugins.<title>"` only as
+  harmless documentation.
+- **Real submenu = shared `categoryCode`.** `appmenumodel.cpp`
+  `makePluginsItems()` groups manifests by `category` and emits one
+  `makeMenu(category, …)` submenu per distinct value. Give every plugin in a
+  suite the same `categoryCode: "JazzKit"` and they nest under a **"JazzKit"**
+  submenu (the raw code string is the title unless it matches a built-in:
+  `composing-arranging-tools`, `color-notes`, `playback`, `lyrics`, which get
+  translated names). This is what JazzKit uses — supersedes the old shared-title
+  -prefix hack. No API hook exists to inject a custom menu *separator* (the menu
+  auto-adds exactly one, after "Manage plugins…"), and plugins cannot register a
+  dockable panel like Palettes/Properties — those are C++ appshell docks.
+- A single manifest with **multiple `actions[]`** also nests (submenu named after
+  the manifest `title`), but legacy `.qml` plugins are one-action-per-file, so
+  `categoryCode` is the lever for a suite of separate `.qml`.
 - One `.qml` = one menu entry = one `MuseScore { onRun }`. Several independent
   actions → several `.qml` with a shared `menuPath` prefix.
 

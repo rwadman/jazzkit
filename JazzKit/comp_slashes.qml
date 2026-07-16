@@ -13,6 +13,7 @@ MuseScore {
     version: "0.1"
     title: "To Comp Slashes"
     menuPath: "Plugins.To Comp Slashes"
+    categoryCode: "JazzKit"
     description: "Copy the selected rhythm into voice 1 of the chosen comping instruments (piano, bass, drums, …) as rhythmic slash notation. Beats without a note become rests. Choices are remembered per instrument."
     requiresScore: true
 

@@ -18,9 +18,10 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 ## Layout
 
 - `JazzKit/` — the plugin source (deployed to MuseScore under the `JazzKit`
-  package name). One `.qml` per menu action, each `menuPath: "Plugins.<title>"`
-  (MuseScore 4 flattens submenus, so entries sort alphabetically by `title`
-  under Plugins — no submenu): `fix_marcato_staccatos.qml` (Fix Marcato
+  package name). One `.qml` per menu action, each with `categoryCode: "JazzKit"`
+  so the MU4.4+ extensions loader nests them under a **"JazzKit" submenu** under
+  Plugins (grouping is by `categoryCode`, not `menuPath` — see the skill's
+  api-gotchas "Menus"): `fix_marcato_staccatos.qml` (Fix Marcato
   Staccatos), `comp_cues.qml` (To Comp Cues), `comp_slashes.qml` (To Comp Slashes),
   `fill_empty_slashes.qml` (Fill Empty Beats with Slashes), `line_breaks.qml`
   (Format Line Breaks), `manifest.json`.

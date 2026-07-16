@@ -12,6 +12,7 @@ MuseScore {
     version: "0.2"
     title: "Fix Marcato Staccatos"
     menuPath: "Plugins.Fix Marcato Staccatos"
+    categoryCode: "JazzKit"
     description: "Make score align better with jazz conventions"
 
 //=============================================================================
