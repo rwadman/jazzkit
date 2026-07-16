@@ -166,11 +166,10 @@ since `writeScore` can't mint one headless.)
 
 ## Acceptance run (recorded 2026-07-16, MuseScore 4.7.x)
 
-`scripts/e2e.sh` → File ▸ New (any empty score) → Plugins ▸ "zz Test Harness". All
-five plugin effects (fill, marcato, comp slashes, comp cues pitched **and drums**)
-ran end-to-end with **0 FAIL**. Report retrieved via `scripts/harness-report.sh`
-(the harness writes it to `~/Documents/MuseScore4/Scores/jazzkit-harness-report.txt`
-— the InfoDialog box can't be copied and plugin `console.log` doesn't reach the log):
+`scripts/e2e.sh` syncs both packages, opens the committed blank fixture
+(`harness/fixtures/blank.mscz`), and — after one click on Plugins ▸ "zz Test
+Harness" — prints and stamps the report. All five plugin effects (fill, marcato,
+comp slashes, comp cues pitched **and drums**) ran end-to-end with **0 FAIL**:
 
 ```text
 HARNESS PASSED — 25 ok.
@@ -196,14 +195,22 @@ OK   compCues drum: no error  (ok)
 OK   compCues drum: one target stamped  (targetsDone=1)
 OK   compCues drum: voice-3 comping chords  (voice-3 chords=4)
 OK   compCues drum: voice-1 time slashes  (voice-1 chords=4)
-OK   lineBreaks: planner predicts breaks  (predicted=15)
-OK   lineBreaks: added the planned breaks  (added=15 expected=15)
-OK   lineBreaks: cleared no pre-existing breaks  (removed=0)
-OK   lineBreaks: LAYOUT_BREAK elements match plan  (found=15)
+OK   lineBreaks: planner predicts breaks  (predicted=23)
+OK   lineBreaks: added the planned breaks  (added=23 expected=23)
+OK   lineBreaks: cleared the pre-existing breaks  (removed=7 pre-existing=7)
+OK   lineBreaks: LAYOUT_BREAK elements match plan  (found=23)
 ```
 
-Notes: the drum staff is added by the harness up front, then a one-shot `Timer`
-yields to the event loop so the audio mixer settles before the cases run — this is
-what avoids the `MixerPanelModel::onTrackAdded` crash (a busy-wait `sleep` does not,
-since it blocks the same main thread). `lineBreaks` counts reflect the 32-measure
-default of a new score (every-2-bars ⇒ 15 breaks), not a fixed fixture size.
+Notes:
+
+- The drum staff is added by the harness up front, then a one-shot `Timer` yields to
+  the event loop so the audio mixer settles before the cases run — this is what
+  avoids the `MixerPanelModel::onTrackAdded` crash (a busy-wait `sleep` does not,
+  since it blocks the same main thread).
+- `lineBreaks` counts reflect the fixture (single Treble-Clef staff, 48 bars, ships
+  with 7 breaks): every-2-bars ⇒ 23 breaks, and the effect clears the 7 pre-existing.
+- **CI can't run the GUI harness**, so `scripts/e2e.sh` stamps this pass into
+  `harness/acceptance.json` fingerprinted over the tested source (effect layer + pure
+  libs + harness + fixture). `npm run e2e:check` (a CI step) fails if that code
+  changes without a fresh recorded run — the enforcement that this harness was
+  actually run for the committed code.

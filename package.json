@@ -5,7 +5,8 @@
   "scripts": {
     "test": "node test/run.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "check": "node scripts/check-qml.mjs JazzKit/*.qml JazzKit/lib/*.qml"
+    "check": "node scripts/check-qml.mjs JazzKit/*.qml JazzKit/lib/*.qml",
+    "e2e:check": "node scripts/check-acceptance.mjs"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

@@ -66,3 +66,12 @@ done
 echo
 echo "== $FOUND =="
 cat "$FOUND"
+
+# Stamp a clean pass into harness/acceptance.json so CI can verify the harness was
+# run for this exact code (it can't run the GUI itself). Refuses a failing report.
+echo
+if grep -q "HARNESS PASSED" "$FOUND" && ! grep -q "FAIL" "$FOUND"; then
+  node "$ROOT/scripts/e2e-accept.mjs" "$FOUND"
+else
+  echo "Report has failures — not recording acceptance. Fix, re-run." >&2
+fi

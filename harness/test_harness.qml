@@ -432,6 +432,9 @@ MuseScore {
         ensureMeasures(6);
         var measures = [];
         for (var m = curScore.firstMeasure; m; m = m.nextMeasure) measures.push(m);
+        // The fixture may already carry breaks (e.g. the Treble-Clef template ships
+        // formatted); the effect clears them, so count them up front to assert on.
+        var preExisting = countLayoutBreaks(measures);
 
         var boxes = [];
         for (var i = 0; i < measures.length; ++i)
@@ -444,7 +447,8 @@ MuseScore {
         var res = Effects.applyLineBreaks(effectCtx(), measures, breakMeasures);
         H.check(r, "lineBreaks: added the planned breaks", res.added === breakMeasures.length,
                 "added=" + res.added + " expected=" + breakMeasures.length);
-        H.check(r, "lineBreaks: cleared no pre-existing breaks", res.removed === 0, "removed=" + res.removed);
+        H.check(r, "lineBreaks: cleared the pre-existing breaks", res.removed === preExisting,
+                "removed=" + res.removed + " pre-existing=" + preExisting);
         H.check(r, "lineBreaks: LAYOUT_BREAK elements match plan", countLayoutBreaks(measures) === breakMeasures.length,
                 "found=" + countLayoutBreaks(measures));
     }
