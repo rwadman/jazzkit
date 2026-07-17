@@ -382,8 +382,14 @@ function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
     if (pitch < 0) return;                      // drumset but no valid pitch
     var V = DRUM_CUE_VOICE;
 
-    // Pass 1: rest shell across [measureTick, selEnd) in voice V, recording which
-    // ticks are notes (not rests). addRest goes through enterRest — no voice-forcing.
+    // Pass 1: rest shell that TILES THE WHOLE MEASURE in voice V — leading gap up to
+    // selStart, the source rhythm, then a trailing rest to the measure end. Voice V
+    // (unlike voice 1) is NOT auto-filled, so a partial shell leaves a GAP; that gap
+    // is what a later `cursor.add`/`changeCRlen` reflows into, corrupting the bar
+    // (two eighths at the bar start dropped the 2nd note; three quarters split the
+    // middle into a gap+eighth). A complete tiling means every replacement is an
+    // exact in-place swap. addRest goes through enterRest — no voice-forcing.
+    var mEnd = _measureEndTick(ctx, measureTick);
     var cur = ctx.curScore.newCursor();
     cur.staffIdx = staffIdx;
     cur.voice = 0;                      // voice 0 always has content
@@ -397,9 +403,12 @@ function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
         cur.setDuration(cr.num, cr.den);
         cur.addRest();
     }
+    if (cur.tick < mEnd) { _setDurationTicks(ctx, cur, mEnd - cur.tick); cur.addRest(); }
 
     // Pass 2: replace each note-beat rest with a cue chord. Rewind on voice 0 (has a
-    // boundary at measureTick) then switch to voice V and walk the shell.
+    // boundary at measureTick) then switch to voice V and walk the shell. Since the
+    // shell fully tiles the measure, each note-beat swap is exact — no reflow shifts
+    // the segments the cursor still has to visit.
     var wc = ctx.curScore.newCursor();
     wc.staffIdx = staffIdx;
     wc.voice = 0;
@@ -418,6 +427,13 @@ function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
         }
         wc.next();
     }
+}
+
+/** The first tick after the measure that contains `tick` (its exclusive end). */
+function _measureEndTick(ctx, tick) {
+    var m = _measureAt(ctx, tick);
+    if (!m) return tick;
+    return m.nextMeasure ? m.nextMeasure.firstSegment.tick : (ctx.curScore.lastSegment.tick + 1);
 }
 
 /**
