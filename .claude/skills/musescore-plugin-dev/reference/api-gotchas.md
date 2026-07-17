@@ -158,12 +158,15 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
 
 ## Drum / percussion staves
 
-- **Cannot write an arbitrary pitched rhythm onto a drum staff with the cursor.**
-  In `NoteInput::addPitch` (`src/engraving/editing/noteinput.cpp`) for a drumset:
+- **`cursor.addNote` (note INPUT) can't write an arbitrary pitched rhythm onto a
+  drum staff.** In `NoteInput::addPitch` (`src/engraving/editing/noteinput.cpp`) for
+  a drumset:
   - invalid drum pitch → `return nullptr` (silently dropped — no note, no error);
   - `track = ds->voice(pitch) + staffBase` → **drumset forces the voice**,
-    overriding `cursor.voice`.
+    overriding `cursor.voice`. This forcing is ONLY in note input.
   - Reliable path for pitched → drum: `cmd("copy")` + `cmd("paste")` (as the GUI).
+  - **But `cursor.add(chord)` bypasses note input entirely** and honors `cursor.voice`
+    on a drum staff (see the voice-3 technique in "Direct-API effects" below).
 - `part.hasDrumStaff` finds the percussion part; `Math.floor(part.startTrack/4)`
   is its absolute staff index (robust with multi-staff parts).
 - The `Drumset` API (`isValid`/`voice`/`line`/`noteHead`) exists **since 4.6**.
@@ -180,30 +183,113 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
 - `curScore.doLayout(fraction(0,1), fraction(-1,1))` forces a mid-command
   relayout (since 4.6), but prefer separate commands.
 
-## Menus
+## Menus / packaging (JazzKit = ONE extension bundle)
 
-- MuseScore 4 (4.7) **flattens `menuPath` submenus**: `"Plugins.MyGroup.My
-  Action"` does *not* nest under a MyGroup submenu — every plugin lands directly
-  under Plugins, sorted alphabetically by `title`. To keep related plugins
-  adjacent, give them a shared `title` prefix (e.g. "To Comp Cues" / "To Comp
-  Slashes"), not a shared menuPath segment. Use `menuPath: "Plugins.<title>"`.
-  `setMenuPath` logs "deprecated" but works in 4.7.
-- One `.qml` = one menu entry = one `MuseScore { onRun }`. Several independent
-  actions → several `.qml` with a shared `menuPath` prefix.
+- **JazzKit ships as a single extension bundle**, NOT loose legacy `.qml`
+  plugins: a `manifest.json` (`uri`, `type`, `apiversion`, `actions[]`) in a
+  folder deployed to the user **`extensions/`** dir (macOS:
+  `~/Library/Application Support/MuseScore/MuseScore4/extensions/JazzKit/`), not
+  `Documents/MuseScore4/Plugins/`. It shows as **one row** in the Plugin Manager
+  (one enable) instead of one row per file.
+- **A multi-action manifest auto-nests under its `title`.** `appmenumodel.cpp`
+  `makePluginsItems()`: a manifest with >1 `actions[]` shown on the appmenu emits
+  `makeMenu(m.title, …)` — so `"title": "JazzKit"` + 5 actions ⇒ a **"JazzKit"
+  submenu**. (`menuPath`/`categoryCode` are irrelevant here — those are the loose
+  -plugin levers.) No API hook injects a custom separator (the menu auto-adds one
+  after "Manage plugins…"), and plugins can't register a dockable panel
+  (Palettes/Properties are C++ appshell docks).
+- **Pin `"apiversion": 1`** (default is 2) to keep the legacy-compatible globals
+  (`curScore`, `cmd`, `Cursor`, `SymId`, all enums, `Settings`, `MessageDialog`).
+  `courtesy_accidentals` (a shipped built-in) is the reference apiversion-1 bundle.
+- Action `type`: **`form`** = a `MuseScore {}` `.qml` loaded as a view (see below);
+  **`macros`** = a `.js` with a `main()` run by the ScriptEngine (has bare
+  `curScore`/`cmd`, `require()`, but **no dialog API in v1** — messages go to
+  `api.log` only). For a *loose* legacy `.qml` suite instead, a shared
+  `categoryCode` is the submenu lever (raw code = title unless it's a built-in:
+  `composing-arranging-tools`/`color-notes`/`playback`/`lyrics`).
 
-## Dialogs + notation `cmd()` (focus/context trap)
+## Extension `form` actions (what JazzKit uses)
 
-- A **`pluginType: "dialog"` plugin cannot dispatch notation-context `cmd()`s**
-  (`paste`, `slash-rhythm`, `voice-3`, …). MS hosts it in a modal
-  `ExtensionViewerDialog` that holds focus, so the notation view isn't the active
-  context and those actions have no enabled handler — log shows
-  `no one can handle the action: paste`. (Context-free actions like `copy` still
-  run, which is a misleading partial success.)
-- Fix: don't use `pluginType: "dialog"`. Make it a normal plugin that opens its
-  **own** `Window` (`import QtQuick.Window`; `modality: Qt.ApplicationModal`,
-  `flags: Qt.Dialog`), and on Apply **`window.close()` FIRST, then run the
-  `cmd()` sequence** — closing returns the notation view to the active context.
-  Pattern lives in `JazzKit/comp_slashes.qml` and `line_breaks.qml`.
+- **A `form` gets NO `onRun`.** It's loaded as a view by the ui-engine, so run
+  work from `Component.onCompleted` (defer a tick with `Qt.callLater` before
+  mutating) and button `onClicked`. `quit()` closes the form.
+- **The host sizes the window to the root's `implicitWidth/Height`, read ONCE at
+  load** (`ExtensionViewer.qml`; falls back to `width/height`, then 480×600). A
+  `Repeater`-driven `ColumnLayout` hasn't laid out when it's measured → the window
+  comes up too short and buttons fall off. Fix: set `implicitHeight` **explicitly**
+  from the known row count (see `comp_*` forms' `updateSize()`).
+- **A form CANNOT dispatch notation `cmd()`s** — same focus trap as the old
+  `pluginType:"dialog"`. The host `ExtensionViewer` (a `StyledDialogView`) holds
+  focus, so `paste`/`slash-rhythm`/`voice-3`/`slash-fill` log
+  `no one can handle the action` (context-free `copy` still runs — misleading).
+  Verified via the harness log. ⇒ **effects invoked from a form must be
+  direct-API only** (cursor note-input + element properties), never `cmd()`.
+  Anything that genuinely needs `cmd()` must be a **`macros`** action (menu-
+  dispatched, notation focused — `cmd()` works there, as `colornotes` shows).
+
+## Direct-API effects (cursor writing, slashes, drums)
+
+- **Cue/slash notation is fully buildable via the API** (all in `elements.h`):
+  cue size = chord/note `small`; slash = replicate `Chord::setSlash` — per note
+  `headGroup = NoteHeadGroup.HEAD_SLASH`, `fixed = true`, `fixedLine = 4`
+  (middle line of a 5-line staff), `play = false`, hide notes after the first
+  (`visible = false`); per chord `stemDirection = Direction.DOWN`, and for the
+  stemless beat-fill also `noStem = true` + `beamMode = Beam.NONE`. See
+  `JazzKit/lib/effects.js` `_applySlashChord`.
+- **`rewindToTick(t)` on an EMPTY target skips FORWARD, not to the measure start.**
+  `rewindToTick` = `tick2leftSegment(); nextInTrack()`, and `nextInTrack` advances
+  past any segment with no element in the current track. A full-measure rest's only
+  segment is at the measure start, so a score-wide segment at `t` (created by
+  *another* staff) has no element in the empty target → the cursor lands in the
+  NEXT measure. Symptom: notes written a bar late ("added to the closest point").
+  **Fix: `rewindToTick(measureTick)`** (the measure start always has a target
+  rest) **then write a leading rest up to `selStart`** — that positions AND splits
+  the rest. See `effects.js` `_writeCueInto` / `_writeSlashRhythmInto`.
+- A note whose duration crosses a barline is auto-written as **tied slices** — a
+  second pass that cue-sizes / applies articulations must walk by **tick**, not by
+  source index (there are more target chords than source notes).
+- **Writing to a DRUM staff needs a VALID drum pitch.** `cursor.addNote(pitch)`
+  silently drops invalid drum pitches and **forces the voice by pitch**. Get a
+  usable pitch from the drumset: `part.instrumentAtTick(t).drumset.isValid(p)` /
+  `.voice(p)` / `.name(p)`. See `effects.js` `_slashPitch`. (`SLASH_PITCH=71` works
+  only on pitched staves.)
+- **You CAN place a drum note in voice 3/4 from a form — via `cursor.add`, NOT
+  note input.** `cursor.addNote` (note input) forces the voice by pitch and no
+  default-kit pitch maps to voice 3/4, so `cursor.voice=2` is overridden. But the
+  forcing lives only in `NoteInput::addPitch`. `Cursor::add(ChordRest)`
+  (`api/v1/cursor.cpp`) does `s->setTrack(cursor.track); undoAddCR(...)` — it
+  **honors `cursor.voice`** and never touches the drumset. The one catch: a fresh
+  `newElement(Element.CHORD)` has `DurationType::V_INVALID`, and the only exposed
+  duration setter (`chord.duration` → `changeCRlen`) needs the chord already
+  placed in a measure — you can't set it before adding. **Technique that works**
+  (verified this session in the harness — `_writeDrumCueInto`), all inside ONE
+  `startCmd`/`endCmd` so layout is deferred until durations are valid:
+  1. **Rest shell**: write the rhythm as RESTS into the target voice with
+     `cursor.addRest()` — it goes through `enterRest`, NOT `addPitch`, so **no
+     voice-forcing**; it also advances the cursor and segments the voice. (Use the
+     empty-voice trick to position: `voice=0; rewindToTick(measureTick); voice=N`.)
+  2. **Drop notes**: a second cursor walks the shell with `cursor.next()`; at each
+     note beat, build `Element.CHORD` + `Element.NOTE` (`chord.add(note)`), then
+     `cursor.add(chord)` (replaces the rest at `cursor.track`), then
+     `chord.duration = <the rest's duration>` to fix the invalid duration.
+  Then dress as a cue: `small` (chord-level, not per-note), `play=false`,
+  `stemDirection=Direction.UP`, `headGroup=HEAD_NORMAL`, `fixed=true` +
+  `fixedLine=-1`. **Ledger lines**: `ChordLayout::updateLedgerLines` draws them for
+  any note above line `-1` (`upLine >= -1` → none) regardless of notehead — so the
+  notehead group does NOT suppress them; `fixedLine=-2` strikes a ledger line
+  through the note. `-1` (space just above the top line) is the highest ledger-free spot.
+  `cmd("voice-3")` also moves an existing selection but needs a
+  macro (form focus trap) — the `cursor.add` path needs no `cmd()`. Melody pitches
+  still can't be shown on a drum staff (dropped) — the cue is rhythm on a fixed
+  carrier pitch (any valid drum pitch; voice is now set explicitly).
+
+## Legacy dialogs + notation `cmd()` (focus/context trap — pre-bundle)
+
+- The same trap bites a **`pluginType: "dialog"`** legacy plugin. If you must run
+  `cmd()`s from a legacy plugin, open your **own** `Window` and on Apply
+  **`window.close()` FIRST, then run the `cmd()`s** (closing returns notation
+  focus). JazzKit no longer does this (it's a direct-API bundle) but the pattern
+  is the escape hatch for a loose plugin that needs `cmd()`.
 - No bundled `Settings` module (checked MS 4.7 / Qt 6.10 — neither `QtCore` nor
   `Qt.labs.settings` ships). Persist dialog choices as a **score metatag**
   (`curScore.setMetaTag` + mirror to `curScore.excerpts[i].partScore`), per

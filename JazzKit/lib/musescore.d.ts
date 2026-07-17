@@ -10,6 +10,12 @@
 // (the proven DI pattern) — a QML-imported stateless .js can't see MuseScore
 // globals at runtime, so we never reference them as free globals here.
 
+// The extension script engine (apiversion 1) exposes a CommonJS-style `exports`
+// global so a macro can `require()` a lib. Each lib ends with a guarded
+// `exports = <lib>` trailer; declare the global here so those lines type-check.
+// It is absent under QML import / the Node test loader (guarded by `typeof`).
+declare var exports: any;
+
 declare namespace MS {
     /** A part/instrument. Absolute staff index = Math.floor(startTrack / 4). */
     interface Part {
@@ -21,6 +27,21 @@ declare namespace MS {
         longName?: string;
         partName?: string;
         hasDrumStaff?: boolean;
+        /** Instrument active at a tick (for drumset access). */
+        instrumentAtTick?(tick: number): Instrument | null;
+    }
+
+    interface Instrument {
+        /** The percussion drumset, or null on a pitched instrument. */
+        drumset: Drumset | null;
+    }
+
+    /** Percussion mapping: which pitches are valid drums, and their voice/line. */
+    interface Drumset {
+        isValid(pitch: number): boolean;
+        voice(pitch: number): number;
+        line(pitch: number): number;
+        name(pitch: number): string;
     }
 
     /** curScore.selection. selectRange's endTick/endStaff are exclusive. */
@@ -70,6 +91,12 @@ declare namespace MS {
         next(): boolean;
         /** Attach an element (e.g. a hidden articulation) at the cursor. */
         add(element: any): void;
+        /** Note input: set the input duration (numerator/denominator). */
+        setDuration(z: number, n: number): void;
+        /** Note input: write a note (or add to the current chord). */
+        addNote(pitch: number, addToChord?: boolean): void;
+        /** Note input: write a rest of the current input duration. */
+        addRest(): void;
     }
 
     interface Measure {
@@ -91,18 +118,35 @@ declare namespace MS {
     interface Element {
         /** Element.CHORD / Element.REST etc. — compared against the QML Element enum. */
         type: number;
-        duration: { ticks: number };
+        /** ChordRest length as a Fraction wrapper (ticks + numerator/denominator). */
+        duration: { ticks: number; numerator: number; denominator: number };
         /** Cue size ("Whether this element is cue size"). */
         small?: boolean;
         /** Notes of a chord (Element.CHORD). */
         notes?: Note[];
         /** Articulations attached to a chord. */
         articulations?: Articulation[];
+        /** Chord stem direction (a Direction enum value). */
+        stemDirection?: any;
+        /** Chord has no stem (slash-fill / stemless slashes). */
+        noStem?: boolean;
+        /** Beam mode (a Beam enum value). */
+        beamMode?: any;
     }
 
     /** A note within a chord. */
     interface Note {
         small?: boolean;
+        /** MIDI pitch (0–127). */
+        pitch: number;
+        /** Notehead group (a NoteHeadGroup enum value, e.g. HEAD_SLASH). */
+        headGroup?: any;
+        /** Pin the notehead to a fixed staff line (slash notation). */
+        fixed?: boolean;
+        fixedLine?: number;
+        /** Whether the note sounds on playback. */
+        play?: boolean;
+        visible?: boolean;
     }
 
     /** A SymId enum value — a number in current MuseScore, sometimes a name string. */

@@ -1,157 +1,66 @@
 import QtQuick
+import QtQuick.Layouts
 
 import MuseScore
 import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
-import "lib/commands.js" as Cmd
-import "lib/comp.js" as Comp
 import "lib/effects.js" as Effects
-import "lib"
 
+// Extension "form" action (see manifest.json). Single self-contained dialog: pick
+// instruments AND apply. The source rhythm is written as slash notation via the
+// cursor + direct API (Effects.compSlashesNotes replicates Chord::setSlash) — no
+// notation cmd()s — so it runs from the form (a clipboard/cmd path could not; see
+// api-gotchas).
 MuseScore {
-    version: "0.1"
-    title: "To Comp Slashes"
-    menuPath: "Plugins.To Comp Slashes"
-    description: "Copy the selected rhythm into voice 1 of the chosen comping instruments (piano, bass, drums, …) as rhythmic slash notation. Beats without a note become rests. Choices are remembered per instrument."
-    requiresScore: true
-
-//=============================================================================
-// Messaging
-
-    InfoDialog { id: infoDialog }
-
-//=============================================================================
-// Persisted choices: the instrumentIds enabled on the last run, stored as a metatag
-// on the score (same mechanism as line_breaks.qml — MS's bundled QML has no Settings
-// module). Recalls whenever the score is open and is saved into the file on save.
+    id: root
+    implicitWidth: 360
+    width: 360
 
     property string settingsTag: "jazzKitCompSlashes"
 
-    // null → first run, default all checked. JSON + excerpt mirroring live in
-    // the shared, unit-tested JazzKit/lib/jazzkit.js.
-    function loadEnabledIds()
-    {
+    property int selStart: 0
+    property int selEnd: 0
+    property int measureTick: 0
+    property int srcStaffIdx: -1
+
+    property string message: ""
+
+    readonly property int rowHeight: 40
+    readonly property int chromeHeight: 130
+    function updateSize() {
+        root.implicitHeight = (root.message !== "" || targetsModel.count === 0)
+            ? 180
+            : chromeHeight + targetsModel.count * rowHeight;
+    }
+
+    ListModel { id: targetsModel }
+
+    function loadEnabledIds() {
         var s = JazzKit.loadJsonTag(curScore, settingsTag);
         return (s && s.ids !== undefined) ? s.ids : null;
     }
 
-    function saveEnabledIds(ids)
-    {
-        JazzKit.saveJsonTag(curScore, settingsTag, { ids: ids });
-    }
-
-//=============================================================================
-// Captured selection (read once at launch — the dialog must not depend on the
-// score selection surviving user interaction with the checkboxes).
-
-    property int selStart: 0
-    property int selEnd: 0            // raw cursor read (0 = wrapped at score end)
-    property int lastSegmentTick: 0   // for the wrap fallback (Comp.selectionGeometry)
-    // Tick of the barline the selection starts in. Pasting a range anchors on the
-    // first chordrest of the target range; an empty target measure holds only a
-    // full-measure rest at the measure start, so a mid-measure paste finds no anchor
-    // and silently does nothing. We paste from the measure start and clear the
-    // dragged-in leading beats afterwards (same trick as drum_comp_cue).
-    property int measureTick: 0
-    property int srcStaffIdx: -1
-
-    // Instruments the checkboxes represent. Roles: label, instrumentId, staffIdx, checked.
-    ListModel { id: targetsModel }
-
-//=============================================================================
-
-    function buildTargets()
-    {
-        targetsModel.clear();
-        // Which parts to offer + their initial checked state is pure, shared,
-        // unit-tested logic (JazzKit/lib/jazzkit.js); we only feed it into the model.
-        var rows = JazzKit.computeTargets(curScore.parts, srcStaffIdx, loadEnabledIds());
-        for (var i = 0; i < rows.length; ++i) targetsModel.append(rows[i]);
-    }
-
-//=============================================================================
-// Bundle the MuseScore globals the effect layer needs (a QML-imported JS lib
-// can't see them). The step sequencing lives in the pure, unit-tested comp.js;
-// this .qml only reads the selection, dispatches, and reports.
-
-    function effectCtx()
-    {
+    function effectCtx() {
         return {
-            curScore: curScore, cmd: cmd,
-            Cmd: Cmd, JazzKit: JazzKit, Comp: Comp, Element: Element
+            curScore: curScore, Element: Element, Cursor: Cursor,
+            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam,
+            division: division
         };
     }
 
-// Stamp the captured rhythm into voice 1 of every chosen target. Runs only after
-// the options window is closed, so the notation view is the active context again —
-// otherwise the paste / slash-rhythm actions have no handler ("no one can handle").
-// Each cmd() runs standalone (no outer startCmd) so the score lays out between
-// steps — wrapping them together crashes MS (see api-gotchas).
-
-    function stamp()
-    {
-        var targets = [];
-        for (var i = 0; i < targetsModel.count; ++i)
-        {
-            var r = targetsModel.get(i);
-            if (r.checked) targets.push(r.staffIdx);
+    function capture() {
+        if (!curScore) { root.message = qsTr("Open a score first."); return; }
+        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion)) {
+            root.message = qsTr("This plugin is for MuseScore 4.4 or later"); return;
         }
-        if (targets.length === 0) return; // nothing checked → no-op
-
-        var res = Effects.compSlashes(effectCtx(), {
-            selStart: selStart, selEnd: selEnd, measureTick: measureTick,
-            lastSegmentTick: lastSegmentTick, srcStaffIdx: srcStaffIdx, targets: targets
-        });
-        if (res.error) infoDialog.show(qsTr(res.error));
-    }
-
-//=============================================================================
-
-    CompTargetsDialog
-    {
-        id: optionsDialog
-        title: qsTr("To Comp Slashes")
-        headerText: qsTr("Add comp slashes to voice 1 of:")
-        model: targetsModel
-
-        onApplied: (instrumentIds) =>
-        {
-            if (instrumentIds.length === 0)
-            {
-                infoDialog.show(qsTr("Check at least one instrument."));
-                return;
-            }
-            saveEnabledIds(instrumentIds);
-            // Close BEFORE stamping so the notation view regains the active
-            // context; otherwise paste / slash-rhythm have no handler.
-            optionsDialog.close();
-            stamp();
-        }
-    }
-
-//=============================================================================
-
-    onRun:
-    {
-        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion))
-        {
-            infoDialog.show(qsTr("This plugin is for MuseScore 4.4 or later"));
-            return;
-        }
-
         var sel = curScore.selection;
-        if (!sel || !sel.isRange || sel.elements.length === 0)
-        {
-            infoDialog.show(qsTr("Please select a range of notes first."));
-            return;
+        if (!sel || !sel.isRange || sel.elements.length === 0) {
+            root.message = qsTr("Please select a range of notes first."); return;
         }
-        if (sel.endStaff - sel.startStaff !== 1)
-        {
-            infoDialog.show(qsTr("Please select notes in a single staff only."));
-            return;
+        if (sel.endStaff - sel.startStaff !== 1) {
+            root.message = qsTr("Please select notes in a single staff only."); return;
         }
-
         srcStaffIdx = sel.startStaff;
 
         var cursor = curScore.newCursor();
@@ -159,17 +68,83 @@ MuseScore {
         selStart = cursor.tick;
         measureTick = cursor.measure.firstSegment.tick;
         cursor.rewind(Cursor.SELECTION_END);
-        selEnd = cursor.tick;   // raw; Comp.selectionGeometry resolves the end-of-score wrap
-        lastSegmentTick = curScore.lastSegment.tick;
+        selEnd = cursor.tick;
+        if (selEnd === 0) selEnd = curScore.lastSegment.tick + 1;
 
-        buildTargets();
-
+        targetsModel.clear();
+        var rows = JazzKit.computeTargets(curScore.parts, srcStaffIdx, loadEnabledIds());
+        for (var i = 0; i < rows.length; ++i) targetsModel.append(rows[i]);
         if (targetsModel.count === 0)
-        {
-            infoDialog.show(qsTr("No comping instruments (piano, bass, drums, …) other than the selected staff were found."));
-            return;
+            root.message = qsTr("No comping instruments (piano, bass, drums, …) other than the selected staff were found.");
+    }
+
+    Component.onCompleted: { capture(); updateSize(); }
+
+    function apply() {
+        var ids = [];
+        var targets = [];
+        for (var i = 0; i < targetsModel.count; ++i) {
+            var r = targetsModel.get(i);
+            if (r.checked) { ids.push(r.instrumentId); targets.push(r.staffIdx); }
+        }
+        if (targets.length === 0) { root.message = qsTr("Check at least one instrument."); updateSize(); return; }
+        JazzKit.saveJsonTag(curScore, settingsTag, { ids: ids });
+
+        var res = Effects.compSlashesNotes(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: measureTick,
+            srcStaffIdx: srcStaffIdx, targets: targets
+        });
+        root.message = res.error ? qsTr(res.error)
+                                 : qsTr("Added comp slashes to %1 instrument(s).").arg(res.targetsDone);
+        updateSize();
+    }
+
+    ColumnLayout {
+        id: contentColumn
+        anchors.fill: parent
+        anchors.margins: 16
+        spacing: 12
+
+        StyledTextLabel {
+            Layout.fillWidth: true
+            visible: root.message !== ""
+            text: root.message
+            wrapMode: Text.WordWrap
         }
 
-        optionsDialog.show();
+        StyledTextLabel {
+            Layout.fillWidth: true
+            visible: root.message === ""
+            text: qsTr("Comp slashes into voice 1 of:")
+        }
+
+        Repeater {
+            model: targetsModel
+            delegate: CheckBox {
+                required property var model
+                required property int index
+                visible: root.message === ""
+                Layout.fillWidth: true
+                text: model.label
+                checked: model.checked
+                onClicked: targetsModel.setProperty(index, "checked", !model.checked)
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+            Item { Layout.fillWidth: true }
+            FlatButton {
+                text: root.message === "" ? qsTr("Cancel") : qsTr("Close")
+                onClicked: root.quit()
+            }
+            FlatButton {
+                visible: root.message === ""
+                text: qsTr("Apply")
+                accentButton: true
+                onClicked: root.apply()
+            }
+        }
     }
 }

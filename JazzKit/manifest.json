@@ -1,9 +1,42 @@
 {
-  "name": "JazzKit",
-  "version": "1.0.0",
-  "title": "JazzKit",
-  "description": "Make score align better with jazz conventions",
-  "author": "Rikard Wadman",
-  "requires": "4.1.0",
-  "category": "PLAYBACK"
+    "uri": "musescore://extensions/jazzkit",
+    "type": "composite",
+    "title": "JazzKit",
+    "description": "Nudge notation toward jazz conventions.",
+    "version": "1.0.0",
+    "apiversion": 1,
+    "ui_context": "ProjectOpened",
+
+    "actions": [
+        {
+            "code": "comp_cues",
+            "type": "form",
+            "title": "To Comp Cues",
+            "path": "comp_cues.qml"
+        },
+        {
+            "code": "comp_slashes",
+            "type": "form",
+            "title": "To Comp Slashes",
+            "path": "comp_slashes.qml"
+        },
+        {
+            "code": "fill_empty_slashes",
+            "type": "form",
+            "title": "Fill Empty Beats with Slashes",
+            "path": "fill_empty_slashes.qml"
+        },
+        {
+            "code": "fix_marcato_staccatos",
+            "type": "form",
+            "title": "Fix Marcato Staccatos",
+            "path": "fix_marcato_staccatos.qml"
+        },
+        {
+            "code": "line_breaks",
+            "type": "form",
+            "title": "Format Line Breaks",
+            "path": "line_breaks.qml"
+        }
+    ]
 }

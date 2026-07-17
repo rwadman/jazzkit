@@ -17,12 +17,10 @@ export const TRACKED = [
     "harness/test_harness.qml",
     "harness/fixtures/blank.mscz",
     "JazzKit/lib/effects.js",
-    "JazzKit/lib/comp.js",
     "JazzKit/lib/articulations.js",
     "JazzKit/lib/linebreaks.js",
     "JazzKit/lib/slashes.js",
     "JazzKit/lib/jazzkit.js",
-    "JazzKit/lib/commands.js",
 ];
 
 export function fingerprint() {
