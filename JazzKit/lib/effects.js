@@ -319,13 +319,13 @@ function _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src
 // note input (the drumset forces the voice by pitch). So the cue is the source
 // RHYTHM written with the closed-hi-hat pitch (valid → survives, and its drumset
 // voice is the upper comping voice), then dressed as a cue: cue-size, no playback,
-// stems up, a normal notehead fixed just above the staff.
+// stems up, a slash notehead fixed just above the staff.
 
 var DRUM_CUE_LINE = -2;   // fixed staff line just above a 5-line staff
 
 /**
  * A drum pitch to carry the cue (+ its forced voice). The note is invisible as a
- * pitch (fixed above the staff, normal notehead, silent), so what matters is the
+ * pitch (fixed above the staff, slash notehead, silent), so what matters is the
  * VOICE: pick the valid pitch with the HIGHEST drumset voice, to sit above the
  * drummer's hands/feet (voices 1-2). Note input can't reach voice 3/4 — no drum
  * pitch maps there — so this tops out at whatever the drumset offers (typically
@@ -352,8 +352,7 @@ function _applyDrumCueChord(ctx, chord) {
     var notes = chord.notes || [];
     for (var i = 0; i < notes.length; ++i) {
         var n = notes[i];
-        try { n.small = true; } catch (e3) { }
-        try { n.headGroup = ctx.NoteHeadGroup.HEAD_NORMAL; } catch (e4) { }
+        try { n.headGroup = ctx.NoteHeadGroup.HEAD_SLASH; } catch (e4) { }
         try { n.fixed = true; } catch (e5) { }
         try { n.fixedLine = DRUM_CUE_LINE; } catch (e6) { }
         try { n.play = false; } catch (e7) { }

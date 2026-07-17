@@ -482,7 +482,7 @@ MuseScore {
     }
 
     // To Comp Cues into a DRUM staff — Effects.compCuesNotes writes the source rhythm
-    // as closed-hi-hat CUE NOTES (cue-size, silent, stem up, normal notehead above
+    // as closed-hi-hat CUE NOTES (cue-size, silent, stem up, slash notehead above
     // the staff) in the hi-hat's drumset voice. Whole-bar source.
     function caseCompCuesNotesDrum(r) {
         var drum = findDrumStaff();
@@ -509,13 +509,15 @@ MuseScore {
                 "voice=" + voice + " chords=" + n + " | @bar: " + dumpTick(drum, barStart));
         var ch = voice >= 0 ? chordAtVoice(drum, voice, barStart) : null;
         H.check(r, "compCuesNotes drum: cue-size", ch && ch.small === true, ch ? "small=" + ch.small : "no chord");
+        H.check(r, "compCuesNotes drum: no per-note small-notehead flag", ch && ch.notes[0].small !== true,
+                ch ? "note.small=" + ch.notes[0].small : "no chord");
         H.check(r, "compCuesNotes drum: silent (no playback)", ch && ch.notes[0].play === false,
                 ch ? "play=" + ch.notes[0].play : "no chord");
         H.check(r, "compCuesNotes drum: fixed above the staff", ch && ch.notes[0].fixed === true && ch.notes[0].fixedLine < 0,
                 ch ? "fixed=" + ch.notes[0].fixed + " line=" + ch.notes[0].fixedLine : "no chord");
-        H.check(r, "compCuesNotes drum: normal notehead (UI voice " + (voice + 1) + ")",
-                ch && ch.notes[0].headGroup === NoteHeadGroup.HEAD_NORMAL,
-                ch ? "headGroup=" + ch.notes[0].headGroup + " normal=" + NoteHeadGroup.HEAD_NORMAL : "no chord");
+        H.check(r, "compCuesNotes drum: slash notehead (UI voice " + (voice + 1) + ")",
+                ch && ch.notes[0].headGroup === NoteHeadGroup.HEAD_SLASH,
+                ch ? "headGroup=" + ch.notes[0].headGroup + " slash=" + NoteHeadGroup.HEAD_SLASH : "no chord");
         H.check(r, "compCuesNotes drum: stems up", ch && ch.stemDirection === Direction.UP,
                 ch ? "stemDirection=" + ch.stemDirection + " up=" + Direction.UP + " down=" + Direction.DOWN : "no chord");
     }

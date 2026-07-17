@@ -256,7 +256,8 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   is overridden. So the "drum comp cue in voice 3" look (`JazzKit/lib/effects.js`
   `_writeDrumCueInto`) tops out at the drumset's highest voice (usually UI voice
   2): write the rhythm on the highest-voice valid pitch, then dress it as a cue —
-  `small`, `play=false`, `stemDirection=Direction.UP`, `headGroup=HEAD_NORMAL`,
+  `small` (chord-level cue size only, not per-note), `play=false`,
+  `stemDirection=Direction.UP`, `headGroup=HEAD_SLASH`,
   `fixed=true` + `fixedLine=-2` (above the staff). Actual **voice 3** needs
   `cmd("voice-3")` to *move* an existing selection — a macro, not a form. Melody
   pitches can't be shown on a drum staff at all (dropped) — the cue is rhythm on
