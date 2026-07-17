@@ -6,10 +6,8 @@ import Muse.UiComponents
 
 import "lib/jazzkit.js" as JazzKit
 import "lib/slashes.js" as Slashes
-import "lib/comp.js" as Comp
 import "lib/articulations.js" as Articulations
 import "lib/linebreaks.js" as LineBreaks
-import "lib/commands.js" as Cmd
 import "lib/effects.js" as Effects
 import "lib/harness.js" as H
 import "lib"
@@ -71,11 +69,11 @@ MuseScore {
     // QML-imported JS lib can't see them). Superset of the shipping plugins' ctxs.
     function effectCtx() {
         return {
-            curScore: curScore, cmd: cmd, newElement: newElement,
-            Cmd: Cmd, JazzKit: JazzKit, Slashes: Slashes, Comp: Comp,
-            Articulations: Articulations,
+            curScore: curScore, newElement: newElement,
+            JazzKit: JazzKit, Slashes: Slashes, Articulations: Articulations,
             Segment: Segment, Element: Element, Cursor: Cursor,
-            SymId: SymId, LayoutBreak: LayoutBreak
+            SymId: SymId, LayoutBreak: LayoutBreak, division: division,
+            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam
         };
     }
 
@@ -142,6 +140,36 @@ MuseScore {
             }
         }
         return null;
+    }
+
+    // Diagnostics: compact dump of a staff's voice-0 content in [from, to], and of
+    // every voice at one tick (to catch a cue written into the wrong voice/track).
+    function elemTag(el) {
+        if (!el) return "-";
+        if (el.type === Element.CHORD) return "C" + (el.notes.length ? el.notes[0].pitch : "?") + (el.small ? "s" : "");
+        if (el.type === Element.REST) return "R";
+        return "?" + el.type;
+    }
+    function dumpVoice(staffIdx, from, to) {
+        var c = curScore.newCursor();
+        c.staffIdx = staffIdx; c.voice = 0; c.rewind(Cursor.SCORE_START);
+        var out = [];
+        while (c.segment) {
+            if (c.tick >= from && c.tick <= to && c.element)
+                out.push(c.tick + ":" + elemTag(c.element) + "/" + (c.element.duration ? c.element.duration.ticks : "?"));
+            if (c.tick > to || !c.next()) break;
+        }
+        return out.length ? out.join(" ") : "(empty)";
+    }
+    function dumpTick(staffIdx, tick) {
+        var seg = null;
+        for (var m = curScore.firstMeasure; m && !seg; m = m.nextMeasure)
+            for (var s = m.firstSegment; s; s = s.nextInMeasure)
+                if (s.segmentType === Segment.ChordRest && s.tick === tick) { seg = s; break; }
+        if (!seg) return "(no segment at " + tick + ")";
+        var out = [];
+        for (var v = 0; v < 4; ++v) out.push("v" + v + "=" + elemTag(seg.elementAt(staffIdx * 4 + v)));
+        return out.join(" ");
     }
 
     function chordCount(start, end, track) {
@@ -291,25 +319,25 @@ MuseScore {
                 "expected " + (n0.pitch + 1) + ", got " + (n1 ? n1.pitch : "?"));
     }
 
-    // Fill Empty Beats — Effects.fillEmptyBeats fills an all-rest voice-1 measure.
-    function caseFillEmptyBeats(r) {
+    // Fill Empty Beats (direct-API) — Effects.fillEmptyBeatsNotes fills an all-rest
+    // voice-1 measure with stemless beat slashes, no cmd(). Asserts the beats became
+    // slash noteheads.
+    function caseFillEmptyBeatsNotes(r) {
         var staffIdx = appendPitched();
-        if (staffIdx < 0) { H.check(r, "fillEmptyBeats: fixture staff", false, "append failed"); return; }
+        if (staffIdx < 0) { H.check(r, "fillEmptyBeatsNotes: fixture staff", false, "append failed"); return; }
         ensureMeasures(2);
         var em = findEmptyMeasure(staffIdx);
-        if (!em) { H.skip(r, "fillEmptyBeats: fills an empty measure", "no all-rest measure"); return; }
+        if (!em) { H.skip(r, "fillEmptyBeatsNotes: fills an empty measure", "no all-rest measure"); return; }
         var track = em.staffIdx * 4;
-        var before = chordCount(em.selStart, em.selEnd, track);
-        if (!JazzKit.selectStaffRange(curScore, em.selStart, em.selEnd, em.staffIdx)) {
-            H.check(r, "fillEmptyBeats: select target measure", false, "selectStaffRange false"); return;
-        }
-        var res = Effects.fillEmptyBeats(effectCtx(), em.selStart, em.selEnd, em.staffIdx);
-        H.check(r, "fillEmptyBeats: found fillable regions", res.regions > 0, "regions=" + res.regions);
-        H.check(r, "fillEmptyBeats: filled, no select failure", res.filled === res.regions && !res.selectFailed,
-                "filled=" + res.filled + "/" + res.regions);
-        var after = chordCount(em.selStart, em.selEnd, track);
-        H.check(r, "fillEmptyBeats: empty beats became slashes", after > before,
-                "voice-1 chords " + before + " → " + after);
+        var res = Effects.fillEmptyBeatsNotes(effectCtx(), em.selStart, em.selEnd, em.staffIdx);
+        H.check(r, "fillEmptyBeatsNotes: found + filled regions", res.regions > 0 && res.filled === res.regions && !res.selectFailed,
+                "regions=" + res.regions + " filled=" + res.filled + " failed=" + res.selectFailed);
+        var n = chordCount(em.selStart, em.selEnd, track);
+        H.check(r, "fillEmptyBeatsNotes: 4 beat slashes in 4/4", n === 4, "chords=" + n);
+        var ch = chordAt(em.staffIdx, em.selStart);
+        H.check(r, "fillEmptyBeatsNotes: notehead is a slash", ch && ch.notes[0].headGroup === NoteHeadGroup.HEAD_SLASH,
+                ch ? "headGroup=" + ch.notes[0].headGroup : "no chord");
+        H.check(r, "fillEmptyBeatsNotes: stemless", ch && ch.noStem === true, ch ? "noStem=" + ch.noStem : "no chord");
     }
 
     // Fix Marcato Staccatos — Effects.fixMarcatoStaccatos (whole score). Fixture:
@@ -346,83 +374,196 @@ MuseScore {
                 "visibilities=[" + v2.join(",") + "]");
     }
 
-    // To Comp Slashes — Effects.compSlashes stamps the source rhythm as slashes
-    // into voice 1 of a target staff. Source = full bar-1 rhythm.
-    function caseCompSlashes(r) {
+    // To Comp Slashes (direct-API slash notation) — Effects.compSlashesNotes writes
+    // the source rhythm as middle-line slash noteheads into a target. Mid-measure
+    // selection (beats 2-4) also exercises positioning.
+    function caseCompSlashesNotes(r) {
         var src = appendPitched();
         var tgt = appendPitched();
-        if (src < 0 || tgt < 0) { H.check(r, "compSlashes: fixture staves", false, "append failed"); return; }
+        if (src < 0 || tgt < 0) { H.check(r, "compSlashesNotes: fixture staves", false, "append failed"); return; }
         ensureMeasures(1);
         writeQuarters(src, [60, 62, 64, 65]);
-        var g = bar1Range();
-        var before = chordCount(g.selStart, g.selEnd, tgt * 4);
+        var m = curScore.firstMeasure;
+        var barStart = m.firstSegment.tick;
+        var selStart = barStart + 480;   // beat 2
+        var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
 
-        var res = Effects.compSlashes(effectCtx(), {
-            selStart: g.selStart, selEnd: g.selEnd, measureTick: g.measureTick,
-            lastSegmentTick: curScore.lastSegment.tick, srcStaffIdx: src, targets: [tgt]
+        var res = Effects.compSlashesNotes(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src, targets: [tgt]
         });
-        H.check(r, "compSlashes: no error", res.error === "", res.error || "ok");
-        H.check(r, "compSlashes: one target stamped", res.targetsDone === 1, "targetsDone=" + res.targetsDone);
-        var after = chordCount(g.selStart, g.selEnd, tgt * 4);
-        H.check(r, "compSlashes: target got slash chords", after > before, "chords " + before + " → " + after);
-        H.check(r, "compSlashes: source rhythm intact", chordCount(g.selStart, g.selEnd, src * 4) === 4,
-                "source chords=" + chordCount(g.selStart, g.selEnd, src * 4));
+        H.check(r, "compSlashesNotes: no error", res.error === "", res.error || "ok");
+        H.check(r, "compSlashesNotes: no chord before selStart", chordCount(barStart, selStart, tgt * 4) === 0,
+                "leading chords=" + chordCount(barStart, selStart, tgt * 4));
+        H.check(r, "compSlashesNotes: rhythm written (3 beats)", chordCount(selStart, selEnd, tgt * 4) === 3,
+                "chords=" + chordCount(selStart, selEnd, tgt * 4) + " | " + dumpVoice(tgt, 0, selEnd));
+        var ch = chordAt(tgt, selStart);
+        H.check(r, "compSlashesNotes: notehead is a slash", ch && ch.notes[0].headGroup === NoteHeadGroup.HEAD_SLASH,
+                ch ? "headGroup=" + ch.notes[0].headGroup + " slash=" + NoteHeadGroup.HEAD_SLASH : "no chord");
+        H.check(r, "compSlashesNotes: notehead fixed to a line", ch && ch.notes[0].fixed === true,
+                ch ? "fixed=" + ch.notes[0].fixed : "no chord");
+        H.check(r, "compSlashesNotes: slash does not play", ch && ch.notes[0].play === false,
+                ch ? "play=" + ch.notes[0].play : "no chord");
     }
 
-    // To Comp Cues (pitched) — Effects.compCues stamps a cue-size copy into a
-    // pitched target.
-    function caseCompCuesPitched(r) {
+    // To Comp Slashes into a DRUM staff — regression for "no notes on the drum
+    // part, mid-bar". A drumset drops invalid pitches silently, so compSlashesNotes
+    // must pick a VALID drum pitch. Uses the up-front drum staff + a mid-bar range.
+    function caseCompSlashesNotesDrum(r) {
+        var drum = findDrumStaff();
+        if (drum < 0) { H.skip(r, "compSlashesNotes drum: writes slashes mid-bar", "no drum staff. " + partsDiag()); return; }
         var src = appendPitched();
-        var tgt = appendPitched();
-        if (src < 0 || tgt < 0) { H.check(r, "compCues pitched: fixture staves", false, "append failed"); return; }
+        if (src < 0) { H.check(r, "compSlashesNotes drum: source staff", false, "append failed"); return; }
         ensureMeasures(1);
         writeQuarters(src, [60, 62, 64, 65]);
-        var g = bar1Range();
+        var m = curScore.firstMeasure;
+        var barStart = m.firstSegment.tick;
+        var selStart = barStart + 480;   // mid-bar (the reported failing case)
+        var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
 
-        var res = Effects.compCues(effectCtx(), {
-            selStart: g.selStart, selEnd: g.selEnd, measureTick: g.measureTick,
-            lastSegmentTick: curScore.lastSegment.tick, srcStaffIdx: src,
+        var res = Effects.compSlashesNotes(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src, targets: [drum]
+        });
+        H.check(r, "compSlashesNotes drum: no error", res.error === "", res.error || "ok");
+        var total = 0;
+        for (var v = 0; v < 4; ++v) total += chordCount(selStart, selEnd, drum * 4 + v);
+        H.check(r, "compSlashesNotes drum: 3 slashes written mid-bar", total === 3,
+                "drum chords(all voices)=" + total + " | v0: " + dumpVoice(drum, 0, selEnd)
+                + " | @selStart: " + dumpTick(drum, selStart));
+    }
+
+    // To Comp Cues (direct-API note-for-note) — Effects.compCuesNotes writes the
+    // source melody note-for-note into a pitched target. Uses a MID-MEASURE source
+    // selection (beats 2-4) against an empty target measure to prove the cue starts
+    // EXACTLY at selStart (splitting the target's full-measure rest) rather than
+    // snapping to the closest segment (the measure start).
+    function caseCompCuesNotes(r) {
+        var src = appendPitched();
+        var tgt = appendPitched();
+        if (src < 0 || tgt < 0) { H.check(r, "compCuesNotes: fixture staves", false, "append failed"); return; }
+        ensureMeasures(1);
+        writeQuarters(src, [60, 62, 64, 65]);   // beats 1-4 of bar 1
+        var m = curScore.firstMeasure;
+        var barStart = m.firstSegment.tick;
+        var selStart = barStart + 480;          // beat 2 (mid-measure)
+        var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+
+        var res = Effects.compCuesNotes(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src,
             targets: [{ staffIdx: tgt, isDrum: false }]
         });
-        H.check(r, "compCues pitched: no error", res.error === "", res.error || "ok");
-        H.check(r, "compCues pitched: one target stamped", res.targetsDone === 1, "targetsDone=" + res.targetsDone);
-        var ch = chordAt(tgt, g.selStart);
-        H.check(r, "compCues pitched: target has a chord", ch !== null, ch ? "chord present" : "none");
-        H.check(r, "compCues pitched: chord is cue-size", ch && ch.small === true, ch ? "small=" + ch.small : "no chord");
-        H.check(r, "compCues pitched: notehead is cue-size",
-                ch && ch.notes && ch.notes.length > 0 && ch.notes[0].small === true,
-                ch && ch.notes && ch.notes.length > 0 ? "note.small=" + ch.notes[0].small : "no note");
+        H.check(r, "compCuesNotes: no error", res.error === "", res.error || "ok");
+        H.check(r, "compCuesNotes: one target stamped", res.targetsDone === 1, "targetsDone=" + res.targetsDone);
+
+        // THE positioning assertion: nothing before selStart (the leading beat is a
+        // rest), so the cue did NOT shift to the closest (measure) start.
+        var lead = chordCount(barStart, selStart, tgt * 4);
+        H.check(r, "compCuesNotes: no chord before selStart (not shifted to closest)", lead === 0,
+                "leading chords before selStart=" + lead);
+        // Alignment: the beat-2 source pitch (62) sits exactly at selStart.
+        var atSel = chordAt(tgt, selStart);
+        H.check(r, "compCuesNotes: source pitch lands at selStart", atSel && atSel.notes[0].pitch === 62,
+                atSel ? "got pitch " + atSel.notes[0].pitch + ", expected 62" : "no chord at selStart");
+        // Exactly the 3 selected notes were written into the target range.
+        H.check(r, "compCuesNotes: exactly the selected notes written", chordCount(selStart, selEnd, tgt * 4) === 3,
+                "cue chords=" + chordCount(selStart, selEnd, tgt * 4) + " | tgt v0: " + dumpVoice(tgt, 0, selEnd));
+        H.check(r, "compCuesNotes: chord is cue-size", atSel && atSel.small === true,
+                (atSel ? "small=" + atSel.small : "no chord") + " | tgt all-voice@480: " + dumpTick(tgt, selStart));
     }
 
-    // To Comp Cues (drum) — Effects.compCues stamps a voice-3 rhythmic cue + voice-1
-    // time slashes into a drum staff. Skips gracefully if no drum staff can be built
-    // (drum staves are flaky — see api-gotchas; downgrade to a full H.skip if needed).
-    function caseCompCuesDrum(r) {
-        // The drum staff was appended up front in onRun and the mixer let settle
-        // (see settleTimer); here we just locate it.
+    // The chord at (staffIdx, voice, tick), or null.
+    function chordAtVoice(staffIdx, voice, tick) {
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            for (var s = m.firstSegment; s; s = s.nextInMeasure)
+                if (s.segmentType === Segment.ChordRest && s.tick === tick) {
+                    var el = s.elementAt(staffIdx * 4 + voice);
+                    return (el && el.type === Element.CHORD) ? el : null;
+                }
+        return null;
+    }
+
+    // To Comp Cues into a DRUM staff — Effects.compCuesNotes writes the source rhythm
+    // as closed-hi-hat CUE NOTES (cue-size, silent, stem up, normal notehead above
+    // the staff) in the hi-hat's drumset voice. Whole-bar source.
+    function caseCompCuesNotesDrum(r) {
         var drum = findDrumStaff();
-        if (drum < 0) {
-            H.skip(r, "compCues drum: rhythmic comping cue",
-                   "no drum staff (addDrumStaff off, or the append did not take). " + partsDiag());
-            return;
-        }
+        if (drum < 0) { H.skip(r, "compCuesNotes drum: cue notes above staff", "no drum staff. " + partsDiag()); return; }
         var src = appendPitched();
-        if (src < 0) { H.check(r, "compCues drum: source staff", false, "append failed"); return; }
+        if (src < 0) { H.check(r, "compCuesNotes drum: source staff", false, "append failed"); return; }
         ensureMeasures(1);
         writeQuarters(src, [60, 62, 64, 65]);
-        var g = bar1Range();
+        var m = curScore.firstMeasure;
+        var barStart = m.firstSegment.tick;
+        var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
 
-        var res = Effects.compCues(effectCtx(), {
-            selStart: g.selStart, selEnd: g.selEnd, measureTick: g.measureTick,
-            lastSegmentTick: curScore.lastSegment.tick, srcStaffIdx: src,
+        var res = Effects.compCuesNotes(effectCtx(), {
+            selStart: barStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src,
             targets: [{ staffIdx: drum, isDrum: true }]
         });
-        H.check(r, "compCues drum: no error", res.error === "", res.error || "ok");
-        H.check(r, "compCues drum: one target stamped", res.targetsDone === 1, "targetsDone=" + res.targetsDone);
-        H.check(r, "compCues drum: voice-3 comping chords", chordCount(g.selStart, g.selEnd, drum * 4 + 2) > 0,
-                "voice-3 chords=" + chordCount(g.selStart, g.selEnd, drum * 4 + 2));
-        H.check(r, "compCues drum: voice-1 time slashes", chordCount(g.measureTick, g.selEnd, drum * 4) > 0,
-                "voice-1 chords=" + chordCount(g.measureTick, g.selEnd, drum * 4));
+        H.check(r, "compCuesNotes drum: no error", res.error === "", res.error || "ok");
+        // The cue goes in the drumset's HIGHEST voice (this shared fixture's drum
+        // staff also carries earlier cases' voice-0 slashes, so target the top voice).
+        var voice = -1;
+        for (var v = 3; v >= 0; --v) { if (chordCount(barStart, selEnd, drum * 4 + v) > 0) { voice = v; break; } }
+        var n = voice >= 0 ? chordCount(barStart, selEnd, drum * 4 + voice) : 0;
+        H.check(r, "compCuesNotes drum: 4 cue notes in the upper voice (UI voice " + (voice + 1) + ")", n === 4,
+                "voice=" + voice + " chords=" + n + " | @bar: " + dumpTick(drum, barStart));
+        var ch = voice >= 0 ? chordAtVoice(drum, voice, barStart) : null;
+        H.check(r, "compCuesNotes drum: cue-size", ch && ch.small === true, ch ? "small=" + ch.small : "no chord");
+        H.check(r, "compCuesNotes drum: silent (no playback)", ch && ch.notes[0].play === false,
+                ch ? "play=" + ch.notes[0].play : "no chord");
+        H.check(r, "compCuesNotes drum: fixed above the staff", ch && ch.notes[0].fixed === true && ch.notes[0].fixedLine < 0,
+                ch ? "fixed=" + ch.notes[0].fixed + " line=" + ch.notes[0].fixedLine : "no chord");
+        H.check(r, "compCuesNotes drum: normal notehead (UI voice " + (voice + 1) + ")",
+                ch && ch.notes[0].headGroup === NoteHeadGroup.HEAD_NORMAL,
+                ch ? "headGroup=" + ch.notes[0].headGroup + " normal=" + NoteHeadGroup.HEAD_NORMAL : "no chord");
+        H.check(r, "compCuesNotes drum: stems up", ch && ch.stemDirection === Direction.UP,
+                ch ? "stemDirection=" + ch.stemDirection + " up=" + Direction.UP + " down=" + Direction.DOWN : "no chord");
+    }
+
+    // Compact dump of ONE voice of a staff across [from, to].
+    function dumpVoiceN(staffIdx, voice, from, to) {
+        var out = [];
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            for (var s = m.firstSegment; s; s = s.nextInMeasure) {
+                if (s.segmentType !== Segment.ChordRest || s.tick < from || s.tick >= to) continue;
+                var el = s.elementAt(staffIdx * 4 + voice);
+                if (el) out.push(s.tick + ":" + elemTag(el) + "/" + (el.duration ? el.duration.ticks : "?"));
+            }
+        return out.length ? out.join(" ") : "(empty)";
+    }
+
+    // Drum comp cue with a MID-BAR selection in a LATER bar (bar 2, beat 2) — the
+    // case the first-bar/bar-start tests never covered. Asserts the cue lands
+    // exactly at selStart (not shifted) and stems point up.
+    function caseCompCuesNotesDrumMidBar(r) {
+        var drum = findDrumStaff();
+        if (drum < 0) { H.skip(r, "drum cue mid-bar", "no drum staff. " + partsDiag()); return; }
+        var src = appendPitched();
+        if (src < 0) { H.check(r, "drum cue mid-bar: source staff", false, "append failed"); return; }
+        ensureMeasures(3);
+        writeQuarters(src, [60, 62, 64, 65, 67, 69, 71, 72]); // bars 1-2
+        var m2 = curScore.firstMeasure.nextMeasure;
+        var bar2 = m2.firstSegment.tick;
+        var selStart = bar2 + 480;   // bar 2, beat 2 — mid-bar, not the first bar
+        var selEnd = m2.nextMeasure ? m2.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+
+        var res = Effects.compCuesNotes(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: bar2, srcStaffIdx: src,
+            targets: [{ staffIdx: drum, isDrum: true }]
+        });
+        H.check(r, "drum cue mid-bar: no error", res.error === "", res.error || "ok");
+        var voice = -1;
+        for (var v = 3; v >= 0; --v) { if (chordCount(selStart, selEnd, drum * 4 + v) > 0) { voice = v; break; } }
+        var n = voice >= 0 ? chordCount(selStart, selEnd, drum * 4 + voice) : 0;
+        // Beats 2-4 selected → 3 cue notes, starting exactly at selStart.
+        H.check(r, "drum cue mid-bar: 3 cue notes at selStart", n === 3,
+                "voice=" + voice + " chords=" + n + " | bar2 cue voice: " + (voice >= 0 ? dumpVoiceN(drum, voice, bar2, selEnd) : "-"));
+        H.check(r, "drum cue mid-bar: NONE before selStart", voice < 0 || chordCount(bar2, selStart, drum * 4 + voice) === 0,
+                "before selStart=" + (voice >= 0 ? chordCount(bar2, selStart, drum * 4 + voice) : "?"));
+        var ch = voice >= 0 ? chordAtVoice(drum, voice, selStart) : null;
+        H.check(r, "drum cue mid-bar: pitch present at selStart", ch !== null, ch ? "chord present" : "MISSING at selStart");
+        H.check(r, "drum cue mid-bar: stems up", ch && ch.stemDirection === Direction.UP,
+                ch ? "stemDirection=" + ch.stemDirection + " up=" + Direction.UP : "no chord");
     }
 
     // Format Line Breaks — Effects.applyLineBreaks attaches the LINE breaks the
@@ -485,11 +626,13 @@ MuseScore {
         var r = H.newReport();
 
         caseSelfTest(r);
-        caseFillEmptyBeats(r);
+        caseFillEmptyBeatsNotes(r);
         caseFixMarcato(r);
-        caseCompSlashes(r);
-        caseCompCuesPitched(r);
-        caseCompCuesDrum(r);
+        caseCompSlashesNotes(r);
+        caseCompSlashesNotesDrum(r);
+        caseCompCuesNotes(r);
+        caseCompCuesNotesDrum(r);
+        caseCompCuesNotesDrumMidBar(r);
         caseLineBreaks(r);
 
         var text = H.format(r);

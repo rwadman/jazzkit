@@ -81,3 +81,6 @@ var slashesLib = {
     beatTicks: beatTicks,
     emptyRestRegions: emptyRestRegions
 };
+
+// require()-able from an extension macro; no-op under QML import / Node loader.
+if (typeof exports !== "undefined") { exports = slashesLib; }

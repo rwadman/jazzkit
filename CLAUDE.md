@@ -17,34 +17,32 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 
 ## Layout
 
-- `JazzKit/` — the plugin source (deployed to MuseScore under the `JazzKit`
-  package name). One `.qml` per menu action, each with `categoryCode: "JazzKit"`
-  so the MU4.4+ extensions loader nests them under a **"JazzKit" submenu** under
-  Plugins (grouping is by `categoryCode`, not `menuPath` — see the skill's
-  api-gotchas "Menus"): `fix_marcato_staccatos.qml` (Fix Marcato
-  Staccatos), `comp_cues.qml` (To Comp Cues), `comp_slashes.qml` (To Comp Slashes),
-  `fill_empty_slashes.qml` (Fill Empty Beats with Slashes), `line_breaks.qml`
-  (Format Line Breaks), `manifest.json`.
+- `JazzKit/` — the plugin source, a **single MU4.4+ extension bundle** (NOT loose
+  legacy plugins): `manifest.json` declares the menu actions and `sync.sh` deploys
+  the folder to MuseScore's user **`extensions/JazzKit/`** (not `Plugins/`). One
+  multi-action manifest → the actions nest under a **"JazzKit" submenu** (grouping
+  is by manifest, not `menuPath`/`categoryCode` — see api-gotchas "Menus"). Pinned
+  `"apiversion": 1` for the bare `curScore`/`Cursor`/`SymId`/enum globals. Every
+  action is a `type: "form"` `.qml` (a `MuseScore {}` component shown as a view):
+  `fix_marcato_staccatos.qml`, `comp_cues.qml`, `comp_slashes.qml`,
+  `fill_empty_slashes.qml`, `line_breaks.qml`. **A form gets no `onRun`** — work
+  runs from `Component.onCompleted` / button handlers — and **cannot dispatch
+  notation `cmd()`s** (focus trap), so every effect is **direct-API only** (cursor
+  note input + element properties; slash notation replicates `Chord::setSlash`).
 - `JazzKit/lib/*.js` — shared **pure** JS libraries (`jazzkit.js`,
-  `articulations.js`, `linebreaks.js`, `slashes.js`) plus `commands.js` (named
-  constants for the MuseScore `cmd()` action codes), imported into a `.qml` via
-  `import "lib/x.js" as X`. Typed with JSDoc + `// @ts-check` (no build — QML
-  loads these files as-is; `npm run typecheck` runs `tsc --checkJs`). Each ends
-  with a per-file `var <name>Lib = {…}` the Node loader reads (QML calls the
-  functions by name). The external MuseScore API shapes the libs consume are
-  modelled once in `JazzKit/lib/musescore.d.ts` (`declare namespace MS` — our
-  verified model, *not* authoritative; grep the source before trusting a shape).
-  tsconfig drops the DOM lib (else `MS`-less names like `Selection` collide).
-  Note: this types the **libs only** — `tsc` cannot read `.qml`, so JS embedded
-  in QML bindings/handlers stays unchecked.
-- `JazzKit/lib/*.qml` — shared **QML components** (widget trees):
-  `CompTargetsDialog.qml` (the checkbox-list dialog for the comp plugins) and
-  `InfoDialog.qml` (the "JazzKit says…" popup with a `show(msg)` method, used by
-  every plugin). Used via a directory import (`import "lib"`); not unit-testable
-  (GUI-only). A
-  QML-imported JS library is stateless and can't see MuseScore globals
-  (`curScore`, `cmd`, `SymId`), so lib functions take those as arguments — which
-  is also what makes them unit-testable. `sync.sh` deploys `lib/` automatically.
+  `articulations.js`, `linebreaks.js`, `slashes.js`) plus `effects.js` (the
+  API-touching effect layer — cursor/direct-API mutations, `// @ts-check`ed but
+  exercised by the GUI harness + a fake cursor in `test/effects.test.mjs`).
+  Imported into a form via `import "lib/x.js" as X`. Each ends with a per-file
+  `var <name>Lib = {…}` (the Node loader reads it; QML calls by name) plus a
+  guarded `exports =` trailer so an extension macro could `require()` it. The
+  external MuseScore API shapes are modelled in `JazzKit/lib/musescore.d.ts`
+  (`declare namespace MS` — verified, *not* authoritative; grep the source before
+  trusting a shape). tsconfig drops the DOM lib (else `Selection` etc. collide).
+  Types the **libs only** — `tsc` can't read `.qml`.
+- `JazzKit/lib/InfoDialog.qml` — the shared "JazzKit says…" popup (`show(msg)`),
+  used by the dev harness (the shipping forms render their own result inline).
+  `sync.sh` deploys `lib/` automatically.
 - `test/` — Node unit tests for `JazzKit/lib/`. `load-qml-lib.mjs` evals a lib
   the way QML does (top-level decls → the `JazzKitExports` namespace) and injects
   fakes; `harness.mjs` is a zero-dep runner (Node 16 has no `node --test`).
@@ -57,7 +55,8 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
 npm test                              # unit-test JazzKit/lib (node test/run.mjs)
 npm run typecheck                     # JSDoc types on JazzKit/lib/*.js (tsc --checkJs, no build)
 node scripts/check-qml.mjs JazzKit/*.qml JazzKit/lib/*.qml
-scripts/sync.sh   # → run from Plugins menu (GUI)
+scripts/sync.sh   # deploy JazzKit → run from Plugins menu (GUI)
+scripts/e2e.sh [--autoclick]   # deploy both pkgs, open a blank fixture, launch MuseScore, (auto-)run the harness, print+accept its report
 scripts/mslog.sh          # what it did
 python3 scripts/analyze-crash.py  # if it crashed
 ```

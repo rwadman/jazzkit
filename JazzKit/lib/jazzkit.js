@@ -172,3 +172,9 @@ var jazzkitLib = {
     loadJsonTag: loadJsonTag,
     saveJsonTag: saveJsonTag
 };
+
+// Also expose as a CommonJS-style module so an extension macro can `require()`
+// this lib. `exports` is a global only in the extension's script engine; the QML
+// import and the Node test loader read the top-level declarations instead, and
+// the typeof guard keeps this a harmless no-op there.
+if (typeof exports !== "undefined") { exports = jazzkitLib; }
