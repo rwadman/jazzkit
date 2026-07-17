@@ -26,6 +26,28 @@
  */
 
 /**
+ * Merge consecutive rests that abut (one ends exactly where the next begins)
+ * into single spans. A voice-1 note between two rests breaks contiguity, so
+ * distinct empty runs stay distinct; only splits from other voices are healed.
+ * @param {Rest[]} rests  in tick order
+ * @returns {Rest[]}
+ */
+function coalesceRests(rests) {
+    /** @type {Rest[]} */
+    var out = [];
+    for (var i = 0; i < rests.length; i++) {
+        var r = rests[i];
+        var last = out.length ? out[out.length - 1] : null;
+        if (last && last.tick + last.durTicks === r.tick) {
+            last.durTicks += r.durTicks;
+        } else {
+            out.push({ tick: r.tick, durTicks: r.durTicks });
+        }
+    }
+    return out;
+}
+
+/**
  * Beat length in ticks, mirroring MuseScore's slash-fill: compound meters
  * (denominator > 4 and numerator divisible by 3) group in threes.
  * @param {number} numerator
@@ -44,6 +66,12 @@ function beatTicks(numerator, denominator, measureTicks) {
  * running slash-fill on it fills those beats into voice 1 without disturbing
  * existing voice-1 notes elsewhere. Rests that share a beat with a note
  * (off-beat / sub-beat) fail the alignment test and are skipped.
+ *
+ * Contiguous voice-1 rests are coalesced first, so region-finding depends only
+ * on where voice 1 is truly empty — NOT on how another voice (e.g. a voice-3
+ * comp cue) fragments the shared segments. Without this, a voice-3 rhythm splits
+ * voice 1's rest into off-beat pieces that each fail the whole-beat test, so a
+ * genuinely-empty voice 1 would be skipped.
  * @param {MeasureRests[]} measures
  * @param {number} selStart
  * @param {number} selEnd
@@ -57,9 +85,10 @@ function emptyRestRegions(measures, selStart, selEnd) {
         var beat = beatTicks(m.numerator, m.denominator, m.measureTicks);
         if (beat <= 0) continue;
 
-        for (var j = 0; j < m.rests.length; j++) {
-            var st = m.rests[j].tick;
-            var dur = m.rests[j].durTicks;
+        var runs = coalesceRests(m.rests);
+        for (var j = 0; j < runs.length; j++) {
+            var st = runs[j].tick;
+            var dur = runs[j].durTicks;
 
             // Clip to the selection.
             var rs = Math.max(st, selStart);
@@ -79,6 +108,7 @@ function emptyRestRegions(measures, selStart, selEnd) {
 // Exposed for the Node test loader; QML reaches the functions by name directly.
 var slashesLib = {
     beatTicks: beatTicks,
+    coalesceRests: coalesceRests,
     emptyRestRegions: emptyRestRegions
 };
 

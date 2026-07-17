@@ -35,7 +35,10 @@
 /**
  * Read each measure's timesig + voice-1 rests as plain data across [selStart,selEnd),
  * then delegate the whole-beat/alignment math to the unit-tested Slashes lib. Finds
- * the first measure from selStart (does NOT depend on the live selection).
+ * the first measure from selStart (does NOT depend on the live selection). Only
+ * voice 1 is read; other voices (e.g. voice-3 comp cues) are ignored — and Slashes
+ * coalesces the voice-1 rests those voices fragment, so emptiness is judged on
+ * voice 1 alone.
  * @param {EffectCtx} ctx
  * @returns {{start:number,end:number}[]}
  */
