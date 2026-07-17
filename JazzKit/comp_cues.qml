@@ -45,7 +45,8 @@ MuseScore {
     function effectCtx() {
         return {
             curScore: curScore, newElement: newElement,
-            Element: Element, Cursor: Cursor, division: division
+            Element: Element, Cursor: Cursor, division: division,
+            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam
         };
     }
 

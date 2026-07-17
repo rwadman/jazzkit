@@ -314,87 +314,106 @@ function _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src
     }
 }
 
-// --- Drum comp cue (direct-API cue notes above the staff) -------------------
-// A drum staff can't take the melody pitches (dropped) or reach voice 3/4 via
-// note input (the drumset forces the voice by pitch). So the cue is the source
-// RHYTHM written with the closed-hi-hat pitch (valid → survives, and its drumset
-// voice is the upper comping voice), then dressed as a cue: cue-size, no playback,
-// stems up, a slash notehead fixed just above the staff.
+// --- Drum comp cue (direct-API cue notes in voice 3, above the staff) --------
+// The cue is the source RHYTHM shown in the drum staff's UPPER comping voice
+// (UI voice 3), dressed as a cue: cue-size, no playback, stems up, a normal
+// notehead fixed just above the staff. A drum staff can't take the melody pitches
+// (dropped) or reach voice 3 via note INPUT (`cursor.addNote` → `NoteInput::addPitch`
+// forces the voice by pitch and no default-kit pitch maps to voice 3). But
+// `cursor.add(chord)` places a plugin-built ChordRest at `cursor.track` WITHOUT
+// note-input — no voice-forcing — so we reach voice 3 directly (verified in the
+// harness). The only catch: a fresh Chord has DurationType::V_INVALID and the sole
+// duration setter (`chord.duration` → `changeCRlen`) needs the chord already placed.
+// So we (1) lay a REST SHELL in voice 3 via `cursor.addRest` (goes through
+// `enterRest`, no forcing; advances + segments the voice), then (2) walk the shell
+// and REPLACE note-beat rests with chords via `cursor.add`, fixing each chord's
+// duration to the rest it replaced. All inside the caller's startCmd/endCmd so
+// layout is deferred until the durations are valid.
 
-var DRUM_CUE_LINE = -2;   // fixed staff line just above a 5-line staff
+// Fixed staff line for the cue. Line 0 = top line, -1 = the space just above it,
+// -2 = the first LEDGER line above. MuseScore draws ledger lines for any note above
+// line -1 (ChordLayout::updateLedgerLines) regardless of notehead, so -2 would strike
+// a ledger line through the slash. -1 is the highest ledger-free position above the staff.
+var DRUM_CUE_LINE = -1;
 
-/**
- * A drum pitch to carry the cue (+ its forced voice). The note is invisible as a
- * pitch (fixed above the staff, slash notehead, silent), so what matters is the
- * VOICE: pick the valid pitch with the HIGHEST drumset voice, to sit above the
- * drummer's hands/feet (voices 1-2). Note input can't reach voice 3/4 — no drum
- * pitch maps there — so this tops out at whatever the drumset offers (typically
- * UI voice 2). Returns null on a pitched staff.
- */
+/** Any VALID drum pitch to carry the cue (voice is set explicitly, so it doesn't
+ *  matter which). The note is invisible as a pitch (fixed above the staff, slash
+ *  notehead, silent). Returns -1 if the drumset has no valid pitch, or null on a
+ *  pitched staff (no drumset → caller falls back to the slash writer). */
 function _drumCuePitch(ctx, staffIdx) {
     var part = _partForStaff(ctx, staffIdx);
     var inst = part && part.instrumentAtTick ? part.instrumentAtTick(0) : null;
     var ds = inst ? inst.drumset : null;
-    if (!ds) return null;
-    var pick = -1, pickVoice = -1;
-    for (var p = 0; p < 128; ++p) {
-        if (!ds.isValid(p)) continue;
-        var v = ds.voice(p);
-        if (v > pickVoice) { pickVoice = v; pick = p; }   // highest voice available
-    }
-    return pick < 0 ? null : { pitch: pick, voice: pickVoice };
+    if (!ds) return null;                       // pitched staff
+    for (var p = 0; p < 128; ++p) if (ds.isValid(p)) return p;
+    return -1;                                  // drumset with no valid pitch (unexpected)
 }
 
-/** Dress a written chord as a drum cue note (cue-size, silent, stem up, above staff). */
+/** Dress a written chord as a drum cue note (cue-size, silent, stem up, above staff,
+ *  NORMAL notehead). */
 function _applyDrumCueChord(ctx, chord) {
     try { chord.small = true; } catch (e) { }
     try { chord.stemDirection = ctx.Direction.UP; } catch (e2) { }
     var notes = chord.notes || [];
     for (var i = 0; i < notes.length; ++i) {
         var n = notes[i];
-        try { n.headGroup = ctx.NoteHeadGroup.HEAD_SLASH; } catch (e4) { }
+        try { n.headGroup = ctx.NoteHeadGroup.HEAD_NORMAL; } catch (e4) { }
         try { n.fixed = true; } catch (e5) { }
         try { n.fixedLine = DRUM_CUE_LINE; } catch (e6) { }
         try { n.play = false; } catch (e7) { }
     }
 }
 
+var DRUM_CUE_VOICE = 2;   // 0-indexed → UI voice 3 (the upper comping voice)
+
 /**
- * Write the source rhythm as a drum comp cue into one drum staff. Everything goes
- * in the closed-hi-hat's forced voice (the drumset overrides cursor.voice, so we
- * write into that voice via the empty-voice trick to keep rests + notes together).
- * @param {EffectCtx} ctx  needs curScore, Element, Direction, NoteHeadGroup, division
+ * Write the source rhythm as a drum comp cue into UI voice 3 of one drum staff.
+ * Rest-shell + cursor.add (see the block comment above). Must run inside the
+ * caller's startCmd/endCmd (compCuesNotes wraps it) — the transient invalid-duration
+ * chords are only valid once `chord.duration` is set, before layout at endCmd.
+ * @param {EffectCtx} ctx  needs curScore, newElement, Element, Direction, NoteHeadGroup, division
  */
 function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
-    var hp = _drumCuePitch(ctx, staffIdx);
-    if (!hp) { _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src); return; }
-    var V = hp.voice;
+    var pitch = _drumCuePitch(ctx, staffIdx);
+    if (pitch === null) { _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src); return; }
+    if (pitch < 0) return;                      // drumset but no valid pitch
+    var V = DRUM_CUE_VOICE;
 
+    // Pass 1: rest shell across [measureTick, selEnd) in voice V, recording which
+    // ticks are notes (not rests). addRest goes through enterRest — no voice-forcing.
     var cur = ctx.curScore.newCursor();
     cur.staffIdx = staffIdx;
     cur.voice = 0;                      // voice 0 always has content
     cur.rewindToTick(measureTick);
     cur.voice = V;                      // switch (keeps the segment; api-gotchas empty-voice trick)
     if (cur.tick < selStart) { _setDurationTicks(ctx, cur, selStart - cur.tick); cur.addRest(); }
+    var noteTicks = {};                 // tick → true at each note position
     for (var i = 0; i < src.length; ++i) {
         var cr = src[i];
+        if (!cr.isRest) noteTicks[cur.tick] = true;
         cur.setDuration(cr.num, cr.den);
-        if (cr.isRest) cur.addRest();
-        else cur.addNote(hp.pitch, false);
+        cur.addRest();
     }
 
-    // Pass 2: dress each cue chord. Rewind to measureTick on voice 0 (which has a
-    // boundary there) then switch to voice V and walk — rewinding to selStart on
-    // voice 0 would skip forward (no boundary in voice 0 at selStart on a drum
-    // staff), missing the cue chords and leaving them at the drumset's down stem.
-    var c2 = ctx.curScore.newCursor();
-    c2.staffIdx = staffIdx;
-    c2.voice = 0;
-    c2.rewindToTick(measureTick);
-    c2.voice = V;
-    while (c2.segment && c2.tick < selEnd) {
-        if (c2.tick >= selStart && c2.element && c2.element.type === ctx.Element.CHORD) _applyDrumCueChord(ctx, c2.element);
-        c2.next();
+    // Pass 2: replace each note-beat rest with a cue chord. Rewind on voice 0 (has a
+    // boundary at measureTick) then switch to voice V and walk the shell.
+    var wc = ctx.curScore.newCursor();
+    wc.staffIdx = staffIdx;
+    wc.voice = 0;
+    wc.rewindToTick(measureTick);
+    wc.voice = V;
+    while (wc.segment && wc.tick < selEnd) {
+        if (noteTicks[wc.tick] && wc.element && wc.element.type === ctx.Element.REST) {
+            var restDur = wc.element.duration;          // capture before replacing
+            var chord = ctx.newElement(ctx.Element.CHORD);
+            var note = ctx.newElement(ctx.Element.NOTE);
+            note.pitch = pitch;
+            chord.add(note);
+            wc.add(chord);                              // replaces the rest at wc.track (voice V)
+            try { chord.duration = restDur; } catch (e) { }   // fix invalid duration
+            _applyDrumCueChord(ctx, chord);
+        }
+        wc.next();
     }
 }
 

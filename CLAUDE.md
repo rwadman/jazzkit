@@ -72,3 +72,8 @@ the `.qml` to effects. MuseScore re-reads an existing `.qml` each run; a new
   `.qml` with the shared `menuPath` prefix.
 - Keep actions scoped — never touch anything outside the target staff/region;
   verify the selection before a destructive `cmd()`.
+- **Always add a regression test for any bug you fix.** Pure-logic bugs → a case
+  in `test/`; API/layout/rendering bugs → an assertion in the GUI harness
+  (`harness/test_harness.qml`) that would have caught it (assert the specific
+  invariant, e.g. `fixedLine >= -1` for the no-ledger-line rule, not just that the
+  effect ran). A found-and-fixed issue without a guarding assertion is unfinished.

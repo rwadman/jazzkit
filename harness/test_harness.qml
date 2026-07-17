@@ -500,13 +500,11 @@ MuseScore {
             targets: [{ staffIdx: drum, isDrum: true }]
         });
         H.check(r, "compCuesNotes drum: no error", res.error === "", res.error || "ok");
-        // The cue goes in the drumset's HIGHEST voice (this shared fixture's drum
-        // staff also carries earlier cases' voice-0 slashes, so target the top voice).
-        var voice = -1;
-        for (var v = 3; v >= 0; --v) { if (chordCount(barStart, selEnd, drum * 4 + v) > 0) { voice = v; break; } }
-        var n = voice >= 0 ? chordCount(barStart, selEnd, drum * 4 + voice) : 0;
-        H.check(r, "compCuesNotes drum: 4 cue notes in the upper voice (UI voice " + (voice + 1) + ")", n === 4,
-                "voice=" + voice + " chords=" + n + " | @bar: " + dumpTick(drum, barStart));
+        // The cue goes specifically in UI voice 3 (0-indexed 2) via cursor.add.
+        var voice = 2;
+        var n = chordCount(barStart, selEnd, drum * 4 + voice);
+        H.check(r, "compCuesNotes drum: 4 cue notes in UI voice 3 (0-idx 2)", n === 4,
+                "chords@v2=" + n + " | @bar: " + dumpTick(drum, barStart));
         var ch = voice >= 0 ? chordAtVoice(drum, voice, barStart) : null;
         H.check(r, "compCuesNotes drum: cue-size", ch && ch.small === true, ch ? "small=" + ch.small : "no chord");
         H.check(r, "compCuesNotes drum: no per-note small-notehead flag", ch && ch.notes[0].small !== true,
@@ -515,9 +513,14 @@ MuseScore {
                 ch ? "play=" + ch.notes[0].play : "no chord");
         H.check(r, "compCuesNotes drum: fixed above the staff", ch && ch.notes[0].fixed === true && ch.notes[0].fixedLine < 0,
                 ch ? "fixed=" + ch.notes[0].fixed + " line=" + ch.notes[0].fixedLine : "no chord");
-        H.check(r, "compCuesNotes drum: slash notehead (UI voice " + (voice + 1) + ")",
-                ch && ch.notes[0].headGroup === NoteHeadGroup.HEAD_SLASH,
-                ch ? "headGroup=" + ch.notes[0].headGroup + " slash=" + NoteHeadGroup.HEAD_SLASH : "no chord");
+        // Regression: a note above line -1 draws a ledger line through the slash
+        // (ChordLayout::updateLedgerLines checks only line pos, not notehead). -1 is
+        // the highest ledger-free spot; fixedLine=-2 struck a ledger line through it.
+        H.check(r, "compCuesNotes drum: no ledger line (fixedLine >= -1)", ch && ch.notes[0].fixedLine >= -1,
+                ch ? "fixedLine=" + ch.notes[0].fixedLine : "no chord");
+        H.check(r, "compCuesNotes drum: normal notehead (UI voice " + (voice + 1) + ")",
+                ch && ch.notes[0].headGroup === NoteHeadGroup.HEAD_NORMAL,
+                ch ? "headGroup=" + ch.notes[0].headGroup + " normal=" + NoteHeadGroup.HEAD_NORMAL : "no chord");
         H.check(r, "compCuesNotes drum: stems up", ch && ch.stemDirection === Direction.UP,
                 ch ? "stemDirection=" + ch.stemDirection + " up=" + Direction.UP + " down=" + Direction.DOWN : "no chord");
     }
@@ -554,16 +557,19 @@ MuseScore {
             targets: [{ staffIdx: drum, isDrum: true }]
         });
         H.check(r, "drum cue mid-bar: no error", res.error === "", res.error || "ok");
-        var voice = -1;
-        for (var v = 3; v >= 0; --v) { if (chordCount(selStart, selEnd, drum * 4 + v) > 0) { voice = v; break; } }
-        var n = voice >= 0 ? chordCount(selStart, selEnd, drum * 4 + voice) : 0;
+        var voice = 2;   // UI voice 3 (0-indexed)
+        var n = chordCount(selStart, selEnd, drum * 4 + voice);
         // Beats 2-4 selected → 3 cue notes, starting exactly at selStart.
-        H.check(r, "drum cue mid-bar: 3 cue notes at selStart", n === 3,
-                "voice=" + voice + " chords=" + n + " | bar2 cue voice: " + (voice >= 0 ? dumpVoiceN(drum, voice, bar2, selEnd) : "-"));
-        H.check(r, "drum cue mid-bar: NONE before selStart", voice < 0 || chordCount(bar2, selStart, drum * 4 + voice) === 0,
-                "before selStart=" + (voice >= 0 ? chordCount(bar2, selStart, drum * 4 + voice) : "?"));
+        H.check(r, "drum cue mid-bar: 3 cue notes at selStart (UI voice 3)", n === 3,
+                "chords@v2=" + n + " | bar2 cue voice: " + dumpVoiceN(drum, voice, bar2, selEnd));
+        H.check(r, "drum cue mid-bar: NONE before selStart", chordCount(bar2, selStart, drum * 4 + voice) === 0,
+                "before selStart=" + chordCount(bar2, selStart, drum * 4 + voice));
         var ch = voice >= 0 ? chordAtVoice(drum, voice, selStart) : null;
         H.check(r, "drum cue mid-bar: pitch present at selStart", ch !== null, ch ? "chord present" : "MISSING at selStart");
+        // Regression: cue must sit at a ledger-free line (fixedLine >= -1), else a
+        // ledger line strikes through the slash notehead.
+        H.check(r, "drum cue mid-bar: no ledger line (fixedLine >= -1)", ch && ch.notes[0].fixedLine >= -1,
+                ch ? "fixedLine=" + ch.notes[0].fixedLine : "no chord");
         H.check(r, "drum cue mid-bar: stems up", ch && ch.stemDirection === Direction.UP,
                 ch ? "stemDirection=" + ch.stemDirection + " up=" + Direction.UP : "no chord");
     }

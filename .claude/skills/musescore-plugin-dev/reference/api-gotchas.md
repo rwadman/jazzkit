@@ -158,12 +158,15 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
 
 ## Drum / percussion staves
 
-- **Cannot write an arbitrary pitched rhythm onto a drum staff with the cursor.**
-  In `NoteInput::addPitch` (`src/engraving/editing/noteinput.cpp`) for a drumset:
+- **`cursor.addNote` (note INPUT) can't write an arbitrary pitched rhythm onto a
+  drum staff.** In `NoteInput::addPitch` (`src/engraving/editing/noteinput.cpp`) for
+  a drumset:
   - invalid drum pitch → `return nullptr` (silently dropped — no note, no error);
   - `track = ds->voice(pitch) + staffBase` → **drumset forces the voice**,
-    overriding `cursor.voice`.
+    overriding `cursor.voice`. This forcing is ONLY in note input.
   - Reliable path for pitched → drum: `cmd("copy")` + `cmd("paste")` (as the GUI).
+  - **But `cursor.add(chord)` bypasses note input entirely** and honors `cursor.voice`
+    on a drum staff (see the voice-3 technique in "Direct-API effects" below).
 - `part.hasDrumStaff` finds the percussion part; `Math.floor(part.startTrack/4)`
   is its absolute staff index (robust with multi-staff parts).
 - The `Drumset` API (`isValid`/`voice`/`line`/`noteHead`) exists **since 4.6**.
@@ -250,18 +253,35 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   usable pitch from the drumset: `part.instrumentAtTick(t).drumset.isValid(p)` /
   `.voice(p)` / `.name(p)`. See `effects.js` `_slashPitch`. (`SLASH_PITCH=71` works
   only on pitched staves.)
-- **You cannot place a drum note in voice 3/4 via note input.** Because the
-  drumset forces the voice by pitch and **no default-drumset pitch maps to voice
-  3/4** (probe a kit: valid pitches sit in voices 1-2 only), `cursor.voice = 2`
-  is overridden. So the "drum comp cue in voice 3" look (`JazzKit/lib/effects.js`
-  `_writeDrumCueInto`) tops out at the drumset's highest voice (usually UI voice
-  2): write the rhythm on the highest-voice valid pitch, then dress it as a cue —
-  `small` (chord-level cue size only, not per-note), `play=false`,
-  `stemDirection=Direction.UP`, `headGroup=HEAD_SLASH`,
-  `fixed=true` + `fixedLine=-2` (above the staff). Actual **voice 3** needs
-  `cmd("voice-3")` to *move* an existing selection — a macro, not a form. Melody
-  pitches can't be shown on a drum staff at all (dropped) — the cue is rhythm on
-  a fixed carrier pitch.
+- **You CAN place a drum note in voice 3/4 from a form — via `cursor.add`, NOT
+  note input.** `cursor.addNote` (note input) forces the voice by pitch and no
+  default-kit pitch maps to voice 3/4, so `cursor.voice=2` is overridden. But the
+  forcing lives only in `NoteInput::addPitch`. `Cursor::add(ChordRest)`
+  (`api/v1/cursor.cpp`) does `s->setTrack(cursor.track); undoAddCR(...)` — it
+  **honors `cursor.voice`** and never touches the drumset. The one catch: a fresh
+  `newElement(Element.CHORD)` has `DurationType::V_INVALID`, and the only exposed
+  duration setter (`chord.duration` → `changeCRlen`) needs the chord already
+  placed in a measure — you can't set it before adding. **Technique that works**
+  (verified this session in the harness — `_writeDrumCueInto`), all inside ONE
+  `startCmd`/`endCmd` so layout is deferred until durations are valid:
+  1. **Rest shell**: write the rhythm as RESTS into the target voice with
+     `cursor.addRest()` — it goes through `enterRest`, NOT `addPitch`, so **no
+     voice-forcing**; it also advances the cursor and segments the voice. (Use the
+     empty-voice trick to position: `voice=0; rewindToTick(measureTick); voice=N`.)
+  2. **Drop notes**: a second cursor walks the shell with `cursor.next()`; at each
+     note beat, build `Element.CHORD` + `Element.NOTE` (`chord.add(note)`), then
+     `cursor.add(chord)` (replaces the rest at `cursor.track`), then
+     `chord.duration = <the rest's duration>` to fix the invalid duration.
+  Then dress as a cue: `small` (chord-level, not per-note), `play=false`,
+  `stemDirection=Direction.UP`, `headGroup=HEAD_NORMAL`, `fixed=true` +
+  `fixedLine=-1`. **Ledger lines**: `ChordLayout::updateLedgerLines` draws them for
+  any note above line `-1` (`upLine >= -1` → none) regardless of notehead — so the
+  notehead group does NOT suppress them; `fixedLine=-2` strikes a ledger line
+  through the note. `-1` (space just above the top line) is the highest ledger-free spot.
+  `cmd("voice-3")` also moves an existing selection but needs a
+  macro (form focus trap) — the `cursor.add` path needs no `cmd()`. Melody pitches
+  still can't be shown on a drum staff (dropped) — the cue is rhythm on a fixed
+  carrier pitch (any valid drum pitch; voice is now set explicitly).
 
 ## Legacy dialogs + notation `cmd()` (focus/context trap — pre-bundle)
 
