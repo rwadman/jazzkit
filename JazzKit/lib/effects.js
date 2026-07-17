@@ -462,6 +462,12 @@ function _measureAt(ctx, tick) {
 
 /** Fill [start, end) (a whole-beat run of rests) with stemless beat slashes. */
 function _writeBeatSlashes(ctx, staffIdx, start, end, beat) {
+    // A drum staff drops invalid drum pitches silently (NoteInput::addPitch) and
+    // forces the voice by pitch, so SLASH_PITCH (a pitched-staff constant) would
+    // write nothing on drums — pick a valid voice-1 drum pitch instead.
+    var pitch = _slashPitch(ctx, staffIdx, 0);
+    if (pitch < 0) return false;            // drum staff with no usable pitch
+
     var cur = ctx.curScore.newCursor();
     cur.staffIdx = staffIdx;
     cur.voice = 0;
@@ -471,7 +477,7 @@ function _writeBeatSlashes(ctx, staffIdx, start, end, beat) {
     var f = ticksToFraction(beat, ctx.division);
     for (var t = start; t < end; t += beat) {
         cur.setDuration(f.z, f.n);
-        cur.addNote(SLASH_PITCH, false);
+        cur.addNote(pitch, false);
     }
 
     var c2 = ctx.curScore.newCursor();

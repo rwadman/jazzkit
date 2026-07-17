@@ -387,6 +387,27 @@ MuseScore {
                 "before [" + v3before + "] after [" + v3after + "]");
     }
 
+    // Fill Empty Beats into a DRUM staff — regression for "fill stopped working on
+    // the drum part." A drumset drops invalid pitches silently (NoteInput::addPitch),
+    // so filling with the pitched-staff SLASH_PITCH wrote NOTHING; the fill must pick
+    // a VALID drum pitch. Fill an empty drum-staff bar and assert slashes appear.
+    function caseFillEmptyBeatsNotesDrum(r) {
+        var drum = findDrumStaff();
+        if (drum < 0) { H.skip(r, "fillEmptyBeats drum: fills an empty bar", "no drum staff. " + partsDiag()); return; }
+        ensureMeasures(2);
+        var em = findEmptyMeasure(drum);
+        if (!em) { H.skip(r, "fillEmptyBeats drum: fills an empty bar", "no all-rest measure"); return; }
+
+        var res = Effects.fillEmptyBeatsNotes(effectCtx(), em.selStart, em.selEnd, em.staffIdx);
+        H.check(r, "fillEmptyBeats drum: found + filled regions", res.regions > 0 && res.filled === res.regions && !res.selectFailed,
+                "regions=" + res.regions + " filled=" + res.filled + " failed=" + res.selectFailed);
+        // Drumset forces the voice by pitch, so count slashes across all voices.
+        var n = 0;
+        for (var v = 0; v < 4; ++v) n += chordCount(em.selStart, em.selEnd, em.staffIdx * 4 + v);
+        H.check(r, "fillEmptyBeats drum: 4 beat slashes written", n === 4,
+                "drum chords(all voices)=" + n + " | v0: " + dumpVoice(em.staffIdx, em.selStart, em.selEnd));
+    }
+
     // Fix Marcato Staccatos — Effects.fixMarcatoStaccatos (whole score). Fixture:
     // a marcato-only chord and a marcato+visible-staccato chord. Only this case
     // adds marcatos, so the {added, hidden} counts are order-independent.
@@ -724,6 +745,7 @@ MuseScore {
 
         caseSelfTest(r);
         caseFillEmptyBeatsNotes(r);
+        caseFillEmptyBeatsNotesDrum(r);
         caseFixMarcato(r);
         caseCompSlashesNotes(r);
         caseCompSlashesNotesDrum(r);
