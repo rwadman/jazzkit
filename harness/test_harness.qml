@@ -644,6 +644,94 @@ MuseScore {
                 ch ? "stemDirection=" + ch.stemDirection + " up=" + Direction.UP : "no chord");
     }
 
+    // Drum comp cue for TWO EIGHTHS at the START of a later bar — regression for
+    // "only the first cue note shows up, together with an 8th rest." Pass 2 replaces
+    // the rest shell RIGHT-TO-LEFT (re-rewinding each time), because fixing a fresh
+    // chord's V_INVALID duration reflows voice V and invalidates a forward-walking
+    // cursor; a single left-to-right walk dropped the second eighth. Bar 3 (bars 1-2
+    // are already loaded with other cases).
+    function caseCompCuesNotesDrumEighths(r) {
+        var drum = findDrumStaff();
+        if (drum < 0) { H.skip(r, "drum cue eighths", "no drum staff. " + partsDiag()); return; }
+        var src = appendPitched();
+        if (src < 0) { H.check(r, "drum cue eighths: source staff", false, "append failed"); return; }
+        ensureMeasures(3);
+        // Two eighths at the start of bar 3 in the source; rest of the bar stays rests.
+        var m3 = curScore.firstMeasure.nextMeasure.nextMeasure;
+        var bar3 = m3.firstSegment.tick;
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = src; c.voice = 0; c.rewindToTick(bar3);
+        c.setDuration(1, 8); c.addNote(60);
+        c.setDuration(1, 8); c.addNote(62);
+        curScore.endCmd();
+        var selStart = bar3;
+        var selEnd = bar3 + 480;   // just the two eighths
+
+        var res = Effects.compCuesNotes(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: bar3, srcStaffIdx: src,
+            targets: [{ staffIdx: drum, isDrum: true }]
+        });
+        H.check(r, "drum cue eighths: no error", res.error === "", res.error || "ok");
+        var voice = 2;   // UI voice 3 (0-indexed)
+        var n = chordCount(selStart, selEnd, drum * 4 + voice);
+        // The bug: only 1 cue note (the first eighth) + an 8th rest. Correct: BOTH.
+        H.check(r, "drum cue eighths: BOTH eighth cue notes written", n === 2,
+                "chords@v2=" + n + " | bar3 cue voice: " + dumpVoiceN(drum, voice, bar3, selEnd));
+        var c1 = chordAtVoice(drum, voice, selStart);
+        var c2 = chordAtVoice(drum, voice, selStart + 240);
+        H.check(r, "drum cue eighths: cue note at the 2nd eighth (tick+240)", c2 !== null,
+                c2 ? "present" : "MISSING at selStart+240 | " + dumpVoiceN(drum, voice, bar3, selEnd));
+        // Both slots must be eighths (240 ticks), not a chord that swallowed the rest.
+        H.check(r, "drum cue eighths: first cue is an eighth (240t)", c1 && c1.duration && c1.duration.ticks === 240,
+                c1 && c1.duration ? "ticks=" + c1.duration.ticks : "no chord");
+        H.check(r, "drum cue eighths: second cue is an eighth (240t)", c2 && c2.duration && c2.duration.ticks === 240,
+                c2 && c2.duration ? "ticks=" + c2.duration.ticks : "no chord");
+    }
+
+    // Drum comp cue for THREE QUARTERS at the START of a bar — regression for a
+    // PARTIAL selection that leaves the rest of the bar unselected. The shell must
+    // still tile the WHOLE measure (trailing fill), else the reflow corrupted the
+    // middle quarter into a gap+eighth ("a 4th, empty 8th, an 8th, a 4th"). Bar 4.
+    function caseCompCuesNotesDrumQuartersPartial(r) {
+        var drum = findDrumStaff();
+        if (drum < 0) { H.skip(r, "drum cue quarters-partial", "no drum staff. " + partsDiag()); return; }
+        var src = appendPitched();
+        if (src < 0) { H.check(r, "drum cue quarters-partial: source staff", false, "append failed"); return; }
+        ensureMeasures(4);
+        var m4 = curScore.firstMeasure.nextMeasure.nextMeasure.nextMeasure;
+        var bar4 = m4.firstSegment.tick;
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = src; c.voice = 0; c.rewindToTick(bar4);
+        c.setDuration(1, 4); c.addNote(60);
+        c.setDuration(1, 4); c.addNote(62);
+        c.setDuration(1, 4); c.addNote(64);
+        curScore.endCmd();
+        var selStart = bar4;
+        var selEnd = bar4 + 1440;   // three quarters — leaves beat 4 unselected
+
+        var res = Effects.compCuesNotes(effectCtx(), {
+            selStart: selStart, selEnd: selEnd, measureTick: bar4, srcStaffIdx: src,
+            targets: [{ staffIdx: drum, isDrum: true }]
+        });
+        H.check(r, "drum cue quarters-partial: no error", res.error === "", res.error || "ok");
+        var voice = 2;
+        var n = chordCount(selStart, selEnd, drum * 4 + voice);
+        H.check(r, "drum cue quarters-partial: all 3 quarter cue notes", n === 3,
+                "chords@v2=" + n + " | bar4 cue voice: " + dumpVoiceN(drum, voice, bar4, bar4 + 1920));
+        // The corruption split the middle quarter; assert each cue is a clean 480t
+        // quarter and there is NO gap between them.
+        var ticks = [selStart, selStart + 480, selStart + 960];
+        for (var i = 0; i < ticks.length; ++i) {
+            var ch = chordAtVoice(drum, voice, ticks[i]);
+            H.check(r, "drum cue quarters-partial: quarter @" + (i + 1) + " is a clean 480t",
+                    ch && ch.duration && ch.duration.ticks === 480,
+                    ch && ch.duration ? "ticks=" + ch.duration.ticks : "MISSING/short at " + ticks[i]
+                        + " | " + dumpVoiceN(drum, voice, bar4, bar4 + 1920));
+        }
+    }
+
     // Format Line Breaks — Effects.applyLineBreaks attaches the LINE breaks the
     // (unit-tested) LineBreaks.computeBreaks planner decides. One box per measure,
     // "every 2 bars", over ≥6 bars → predictable break count.
@@ -699,33 +787,41 @@ MuseScore {
     }
 
     // Score integrity scan: after every effect has run, no staff/voice may leave a
-    // measure underfull or overfull. For each measure + each of the 4 voices, sum the
-    // ChordRest durations that voice actually holds and assert it equals the measure's
-    // nominal ticks (0 = the voice is simply absent, which is fine). A voice that sums
-    // to e.g. 1680 in a 1920-tick bar is a corrupt bar — the exact defect (3.5 quarters)
-    // that renders wrong but that elementAt spot-reads miss. Reports the first offender.
-    // Returns "" if every staff/voice fills every measure, else a description of the
-    // first offender (and the total count).
+    // measure corrupt. Scans EVERY measure of EVERY staff (all parts) and all 4
+    // voices. For a voice that holds any ChordRest, the elements must TILE the bar
+    // exactly: start at the measure tick, run contiguously (each element begins where
+    // the previous ended), and end at the measure end. This catches both the
+    // underfull/overfull case (a voice summing to 1680/1920) AND an internal GAP or
+    // overlap that would net to the right sum ("a 4th, a 240-tick hole, an 8th, a
+    // 4th" — the exact defect a plain sum misses). Empty voices (no content) are
+    // fine. Reports the first offender and the total count.
     function findCorruptBar() {
         var bad = "";
         var count = 0;
         var maxStaves = JazzKit.countStaves(curScore);
         var mi = 0;
         for (var m = curScore.firstMeasure; m; m = m.nextMeasure, ++mi) {
+            var mStart = m.firstSegment.tick;
             var full = m.timesigNominal.ticks;
+            var mEnd = mStart + full;
             for (var s = 0; s < maxStaves; ++s) {
                 for (var v = 0; v < 4; ++v) {
-                    var sum = 0, seen = false;
+                    var cursorTick = mStart, seen = false, why = "";
                     for (var seg = m.firstSegment; seg; seg = seg.nextInMeasure) {
                         if (seg.segmentType !== Segment.ChordRest) continue;
                         var el = seg.elementAt(s * 4 + v);
                         if (!el || !el.duration) continue;
-                        seen = true; sum += el.duration.ticks;
+                        if (!seen && seg.tick !== mStart) why = "starts at " + seg.tick + " not " + mStart;
+                        else if (seen && seg.tick !== cursorTick)
+                            why = (seg.tick > cursorTick ? "gap" : "overlap") + " at " + seg.tick + " (expected " + cursorTick + ")";
+                        seen = true;
+                        cursorTick = seg.tick + el.duration.ticks;
                     }
-                    if (seen && sum !== full) {
+                    if (seen && !why && cursorTick !== mEnd) why = "ends at " + cursorTick + " not " + mEnd;
+                    if (seen && why) {
                         ++count;
                         if (!bad) bad = "measure " + (mi + 1) + " staff " + s + " voice " + (v + 1)
-                                       + " sums " + sum + "/" + full + " [" + dumpVoiceN(s, v, m.firstSegment.tick, m.firstSegment.tick + full) + "]";
+                                       + ": " + why + " [" + dumpVoiceN(s, v, mStart, mEnd) + "]";
                     }
                 }
             }
@@ -752,6 +848,8 @@ MuseScore {
         caseCompCuesNotes(r);
         caseCompCuesNotesDrum(r);
         caseCompCuesNotesDrumMidBar(r);
+        caseCompCuesNotesDrumEighths(r);
+        caseCompCuesNotesDrumQuartersPartial(r);
         // Runs AFTER the drum-cue cases on purpose: it appends a staff, and doing so
         // before the drum cue perturbs that effect's (changeCRlen-sensitive) layout and
         // corrupts its bar. Kept last so the drum cue writes in its normal context; this
