@@ -340,6 +340,53 @@ MuseScore {
         H.check(r, "fillEmptyBeatsNotes: stemless", ch && ch.noStem === true, ch ? "noStem=" + ch.noStem : "no chord");
     }
 
+    // Fill Empty Beats, ignoring voice 3 — regression for "fill should ignore a
+    // voice-3 comp cue when finding empty regions." Fixture: an all-rest voice 1
+    // with a SYNCOPATED voice-3 rhythm laid over it (segments at off-beat ticks).
+    // Region-finding must judge emptiness on voice 1 alone, so the whole bar still
+    // fills with 4 beat slashes, and the voice-3 cue is left untouched.
+    function caseFillEmptyBeatsVoice3(r) {
+        var staffIdx = appendPitched();
+        if (staffIdx < 0) { H.check(r, "fillEmptyBeats v3: fixture staff", false, "append failed"); return; }
+        ensureMeasures(2);
+        var em = findEmptyMeasure(staffIdx);
+        if (!em) { H.skip(r, "fillEmptyBeats v3: fills over a voice-3 cue", "no all-rest measure"); return; }
+
+        // Syncopated voice-3 rhythm: 8th rest, then notes at off-beat 240 + beats.
+        // (addNote honors cursor.voice on a pitched staff; use the empty-voice trick
+        // to position at the measure start in voice 3.)
+        curScore.startCmd();
+        var vc = curScore.newCursor();
+        vc.staffIdx = staffIdx; vc.voice = 0; vc.rewindToTick(em.selStart); vc.voice = 2;
+        vc.setDuration(1, 8); vc.addRest();                                   // 0..240
+        vc.setDuration(1, 8); vc.addNote(72);                                 // 240..480
+        vc.setDuration(1, 4); vc.addNote(72);                                 // 480..960
+        vc.setDuration(1, 4); vc.addNote(72);                                 // 960..1440
+        vc.setDuration(1, 4); vc.addNote(72);                                 // 1440..1920
+        curScore.endCmd();
+        // The cue must be a WELL-FORMED bar: exact ticks/durations summing to a full
+        // measure. Counting chords alone misses a corrupt bar (right count, wrong
+        // lengths) — the shape string is the real invariant, asserted before & after.
+        var want = "0:R/240 240:C72/240 480:C72/480 960:C72/480 1440:C72/480";
+        var v3before = dumpVoiceN(staffIdx, 2, em.selStart, em.selEnd);
+        H.check(r, "fillEmptyBeats v3: cue is a well-formed bar", v3before === want,
+                "want [" + want + "] got [" + v3before + "]");
+
+        var res = Effects.fillEmptyBeatsNotes(effectCtx(), em.selStart, em.selEnd, em.staffIdx);
+        H.check(r, "fillEmptyBeats v3: filled the whole bar despite voice 3",
+                res.regions === 1 && res.filled === 1 && !res.selectFailed,
+                "regions=" + res.regions + " filled=" + res.filled + " failed=" + res.selectFailed);
+        var n = chordCount(em.selStart, em.selEnd, em.staffIdx * 4);
+        H.check(r, "fillEmptyBeats v3: 4 voice-1 beat slashes", n === 4,
+                "voice-1 chords=" + n + " | v1: " + dumpVoice(em.staffIdx, em.selStart, em.selEnd));
+        var ch = chordAt(em.staffIdx, em.selStart);
+        H.check(r, "fillEmptyBeats v3: notehead is a slash", ch && ch.notes[0].headGroup === NoteHeadGroup.HEAD_SLASH,
+                ch ? "headGroup=" + ch.notes[0].headGroup : "no chord");
+        var v3after = dumpVoiceN(staffIdx, 2, em.selStart, em.selEnd);
+        H.check(r, "fillEmptyBeats v3: voice-3 cue untouched", v3after === v3before,
+                "before [" + v3before + "] after [" + v3after + "]");
+    }
+
     // Fix Marcato Staccatos — Effects.fixMarcatoStaccatos (whole score). Fixture:
     // a marcato-only chord and a marcato+visible-staccato chord. Only this case
     // adds marcatos, so the {added, hidden} counts are order-independent.
@@ -501,10 +548,12 @@ MuseScore {
         });
         H.check(r, "compCuesNotes drum: no error", res.error === "", res.error || "ok");
         // The cue goes specifically in UI voice 3 (0-indexed 2) via cursor.add.
+        // Whole-bar (cue starts at the measure boundary) is the regression: pass 2
+        // must replace the rest shell right-to-left, else beat 2 is dropped.
         var voice = 2;
         var n = chordCount(barStart, selEnd, drum * 4 + voice);
         H.check(r, "compCuesNotes drum: 4 cue notes in UI voice 3 (0-idx 2)", n === 4,
-                "chords@v2=" + n + " | @bar: " + dumpTick(drum, barStart));
+                "chords@v2=" + n + " | v2: " + dumpVoiceN(drum, 2, barStart, selEnd));
         var ch = voice >= 0 ? chordAtVoice(drum, voice, barStart) : null;
         H.check(r, "compCuesNotes drum: cue-size", ch && ch.small === true, ch ? "small=" + ch.small : "no chord");
         H.check(r, "compCuesNotes drum: no per-note small-notehead flag", ch && ch.notes[0].small !== true,
@@ -628,6 +677,46 @@ MuseScore {
         return "(could not write report file — dirs tried: " + dirs.join(", ") + ")";
     }
 
+    // Score integrity scan: after every effect has run, no staff/voice may leave a
+    // measure underfull or overfull. For each measure + each of the 4 voices, sum the
+    // ChordRest durations that voice actually holds and assert it equals the measure's
+    // nominal ticks (0 = the voice is simply absent, which is fine). A voice that sums
+    // to e.g. 1680 in a 1920-tick bar is a corrupt bar — the exact defect (3.5 quarters)
+    // that renders wrong but that elementAt spot-reads miss. Reports the first offender.
+    // Returns "" if every staff/voice fills every measure, else a description of the
+    // first offender (and the total count).
+    function findCorruptBar() {
+        var bad = "";
+        var count = 0;
+        var maxStaves = JazzKit.countStaves(curScore);
+        var mi = 0;
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure, ++mi) {
+            var full = m.timesigNominal.ticks;
+            for (var s = 0; s < maxStaves; ++s) {
+                for (var v = 0; v < 4; ++v) {
+                    var sum = 0, seen = false;
+                    for (var seg = m.firstSegment; seg; seg = seg.nextInMeasure) {
+                        if (seg.segmentType !== Segment.ChordRest) continue;
+                        var el = seg.elementAt(s * 4 + v);
+                        if (!el || !el.duration) continue;
+                        seen = true; sum += el.duration.ticks;
+                    }
+                    if (seen && sum !== full) {
+                        ++count;
+                        if (!bad) bad = "measure " + (mi + 1) + " staff " + s + " voice " + (v + 1)
+                                       + " sums " + sum + "/" + full + " [" + dumpVoiceN(s, v, m.firstSegment.tick, m.firstSegment.tick + full) + "]";
+                    }
+                }
+            }
+        }
+        return count === 0 ? "" : (count + " corrupt; first: " + bad);
+    }
+    function checkNoCorruptBars(r) {
+        var bad = findCorruptBar();
+        H.check(r, "integrity: no corrupt (under/over-full) bars in any staff/voice",
+                bad === "", bad === "" ? "all bars fill their measure" : bad);
+    }
+
     // Run every case and show/emit the report. Called from settleTimer, i.e. after the
     // drum-staff append (in onRun) has had an event-loop turn to settle.
     function runCases() {
@@ -641,7 +730,14 @@ MuseScore {
         caseCompCuesNotes(r);
         caseCompCuesNotesDrum(r);
         caseCompCuesNotesDrumMidBar(r);
+        // Runs AFTER the drum-cue cases on purpose: it appends a staff, and doing so
+        // before the drum cue perturbs that effect's (changeCRlen-sensitive) layout and
+        // corrupts its bar. Kept last so the drum cue writes in its normal context; this
+        // case's own staff is independent. (The integrity scan below guards both.)
+        caseFillEmptyBeatsVoice3(r);
         caseLineBreaks(r);
+
+        checkNoCorruptBars(r);
 
         var text = H.format(r);
         var path = emitReport(text);

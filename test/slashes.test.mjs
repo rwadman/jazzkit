@@ -68,3 +68,26 @@ test("no rests / empty input → no regions", () => {
     eq(Slashes.emptyRestRegions([measure()], 0, 1920), []);
     eq(Slashes.emptyRestRegions([], 0, 1920), []);
 });
+
+// --- coalesceRests / ignoring other voices ----------------------------------
+
+test("coalesceRests merges abutting rests, keeps note-separated ones apart", () => {
+    // Two abutting rests → one span.
+    eq(Slashes.coalesceRests([{ tick: 0, durTicks: 240 }, { tick: 240, durTicks: 720 }]),
+        [{ tick: 0, durTicks: 960 }]);
+    // A gap (a voice-1 note sits between) → stays two spans.
+    eq(Slashes.coalesceRests([{ tick: 0, durTicks: 480 }, { tick: 960, durTicks: 480 }]),
+        [{ tick: 0, durTicks: 480 }, { tick: 960, durTicks: 480 }]);
+});
+
+test("voice-3 fragmentation is ignored: an empty voice 1 is still one region", () => {
+    // Voice 1 is empty across the whole 4/4 bar, but a syncopated voice-3 comp cue
+    // fragments its rest at off-beat ticks (240, 720). Each fragment alone fails the
+    // whole-beat test; coalesced, the true empty run [0,1920) fills as one region.
+    const m = measure({ rests: [
+        { tick: 0, durTicks: 240 },
+        { tick: 240, durTicks: 480 },
+        { tick: 720, durTicks: 1200 },
+    ] });
+    eq(Slashes.emptyRestRegions([m], 0, 1920), [{ start: 0, end: 1920 }]);
+});
