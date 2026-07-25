@@ -136,3 +136,9 @@ var articulationsLib = {
     staccatoCandidates: staccatoCandidates,
     classifyChord: classifyChord
 };
+
+// require()-able from an extension macro; no-op under QML import / Node loader.
+// NOT optional: `require` returns whatever the file assigned to the shared global
+// `exports`, so a lib without this trailer silently hands back the PREVIOUS
+// require's exports (this bit us — see api-gotchas, "macros actions").
+if (typeof exports !== "undefined") { exports = articulationsLib; }

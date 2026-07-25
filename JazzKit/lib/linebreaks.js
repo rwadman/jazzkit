@@ -192,3 +192,7 @@ var linebreaksLib = {
     minMerge: minMerge,
     computeBreaks: computeBreaks
 };
+
+// require()-able from an extension macro; no-op under QML import / Node loader.
+// Mandatory — see the note in articulations.js.
+if (typeof exports !== "undefined") { exports = linebreaksLib; }

@@ -21,7 +21,8 @@ submenus, so they sort alphabetically by title):
 | **To Comp Slashes** | Copy the selected rhythm into voice 1 of chosen comping instruments as slash notation. Empty beats become rests. |
 | **Fill Empty Beats with Slashes** | Fill only the empty beats of voice 1 with slashes, leaving existing notes untouched. |
 | **Format Line Breaks** | Clear existing breaks and re-apply line breaks at double barlines, repeats, and every N bars. |
-| **Fix Marcato Staccatos** | Add hidden staccattos to every marcato (^) note in the score, to make the playback more closely mimic the usual jazz articulation. |
+| **Autofix** | Runs silently — no dialog at all; the counts go to the MuseScore log. Every enabled fix, over the whole score: hidden staccatos on marcato (^) notes (so playback mimics the usual jazz articulation), and courtesy accidentals — added where a note altered in the previous bar reverts, removed where they have become superfluous. |
+| **Autofix Settings** | Choose which fixes **Autofix** performs, and how added courtesy accidentals are drawn — (♮), [♮] or bare. Remembered per score. |
 
 ## Install
 

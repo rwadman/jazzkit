@@ -161,6 +161,51 @@ function saveJsonTag(curScore, tag, obj) {
     }
 }
 
+// --- Autofix settings -------------------------------------------------------
+// Which fixes the Autofix action runs, shared by autofix.qml (reads) and
+// autofix_settings.qml (reads + writes). Stored with the same per-score metatag
+// mechanism as the other dialogs' choices, so the defaults below apply to a score
+// that has never had the settings form opened.
+
+var AUTOFIX_TAG = "jazzKitAutofix";
+
+/** Defaults for a score with no stored Autofix settings.
+ *  bracket: 0 none, 1 parenthesis, 2 bracket (MuseScore's AccidentalBracket). */
+var AUTOFIX_DEFAULTS = { marcato: true, courtesy: true, bracket: 1 };
+
+/**
+ * Autofix settings for a score, with every missing/garbled field filled from the
+ * defaults (so a partially-written tag can never disable a fix by accident).
+ * @param {MS.Score|null|undefined} curScore
+ * @returns {{marcato:boolean, courtesy:boolean, bracket:number}}
+ */
+function loadAutofixSettings(curScore) {
+    var s = loadJsonTag(curScore, AUTOFIX_TAG) || {};
+    var bracket = parseInt(s.bracket, 10);
+    if (!(bracket >= 0 && bracket <= 2)) bracket = AUTOFIX_DEFAULTS.bracket;
+    return {
+        marcato: s.marcato === undefined ? AUTOFIX_DEFAULTS.marcato : !!s.marcato,
+        courtesy: s.courtesy === undefined ? AUTOFIX_DEFAULTS.courtesy : !!s.courtesy,
+        bracket: bracket
+    };
+}
+
+/**
+ * Persist Autofix settings (normalised first, so what we write is what a later
+ * load returns).
+ * @param {MS.Score|null|undefined} curScore
+ * @param {{marcato:boolean, courtesy:boolean, bracket:number}} settings
+ * @returns {void}
+ */
+function saveAutofixSettings(curScore, settings) {
+    saveJsonTag(curScore, AUTOFIX_TAG, {
+        marcato: !!settings.marcato,
+        courtesy: !!settings.courtesy,
+        bracket: (settings.bracket >= 0 && settings.bracket <= 2)
+            ? settings.bracket : AUTOFIX_DEFAULTS.bracket
+    });
+}
+
 // Exposed for the Node test loader; QML reaches the functions by name directly.
 var jazzkitLib = {
     isSupportedVersion: isSupportedVersion,
@@ -170,7 +215,11 @@ var jazzkitLib = {
     selectStaffRange: selectStaffRange,
     computeTargets: computeTargets,
     loadJsonTag: loadJsonTag,
-    saveJsonTag: saveJsonTag
+    saveJsonTag: saveJsonTag,
+    AUTOFIX_TAG: AUTOFIX_TAG,
+    AUTOFIX_DEFAULTS: AUTOFIX_DEFAULTS,
+    loadAutofixSettings: loadAutofixSettings,
+    saveAutofixSettings: saveAutofixSettings
 };
 
 // Also expose as a CommonJS-style module so an extension macro can `require()`

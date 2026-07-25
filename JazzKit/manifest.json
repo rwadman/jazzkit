@@ -9,6 +9,18 @@
 
     "actions": [
         {
+            "code": "autofix",
+            "type": "macros",
+            "title": "Autofix",
+            "path": "autofix.js"
+        },
+        {
+            "code": "autofix_settings",
+            "type": "form",
+            "title": "Autofix Settings",
+            "path": "autofix_settings.qml"
+        },
+        {
             "code": "comp_cues",
             "type": "form",
             "title": "To Comp Cues",
@@ -25,12 +37,6 @@
             "type": "form",
             "title": "Fill Empty Beats with Slashes",
             "path": "fill_empty_slashes.qml"
-        },
-        {
-            "code": "fix_marcato_staccatos",
-            "type": "form",
-            "title": "Fix Marcato Staccatos",
-            "path": "fix_marcato_staccatos.qml"
         },
         {
             "code": "line_breaks",

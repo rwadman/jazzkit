@@ -227,6 +227,41 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   Anything that genuinely needs `cmd()` must be a **`macros`** action (menu-
   dispatched, notation focused — `cmd()` works there, as `colornotes` shows).
 
+## `macros` actions — the way to run WITHOUT opening a window
+
+- A **`form` action always opens a window**: the host loads it as a view in a
+  `StyledDialogView`. There is no "invisible form" — an action that takes no input
+  and should just run must be **`type: "macros"`** (a `.js` whose `main()` the
+  script engine calls — the shipped `courtesy_accidentals` add/remove are exactly
+  this, as is JazzKit's `autofix.js`). A form can close itself with
+  `Qt.callLater(quit)`, but the window still flashes — only a macro shows nothing.
+- **A v1 macro gets the same bare globals a legacy QML plugin had.**
+  `EngravingApiV1::setup` copies *every* property/invokable of the engraving API
+  onto the global object (`api/v1/engravingapiv1.cpp`), so `curScore`,
+  `newElement`, `cmd`, `quit`, `division`, `mscoreMajorVersion` and every enum
+  (`Element`, `Segment`, `Cursor`, `SymId`, `Accidental`, …) are all there.
+- **`require("lib/x.js")` works and is the macro's `import`.** `JsModuleLoader`
+  resolves a non-`MuseApi.*` name against the SCRIPT'S OWN directory first (then
+  the default/user extension paths), wraps the file in an IIFE, and returns
+  whatever it assigned to the global `exports`.
+- **`exports` is ONE shared global, never reset between requires**
+  (`scriptengine.cpp` sets it once at engine setup; `requireFile` just reads it
+  back after evaluating). So a lib that forgets the
+  `if (typeof exports !== "undefined") { exports = <lib>; }` trailer silently
+  returns the **previous** require's exports — you get a live object of the wrong
+  shape, and the failure surfaces far away as
+  `TypeError: Property 'x' of object [object Object] is not a function`. Verified
+  this session: `require("lib/articulations.js")` (no trailer at the time) handed
+  back jazzkit.js's exports. Give EVERY lib the trailer, even ones no macro
+  requires yet — `test/require-exports.test.mjs` emulates this loader (a `node:vm`
+  context = the shared global; entry script unwrapped, requires IIFE-wrapped) and
+  fails if a trailer goes missing, so this is checkable without the GUI.
+- **No dialog API in v1 macros** — `console.log` (→ the MuseScore log) is the only
+  feedback channel. That's a feature for a silent action, and the reason anything
+  needing options keeps a separate `form` action for its settings.
+- Menu-dispatched macros are notation-focused, so `cmd()` DOES work there (unlike
+  in a form).
+
 ## Direct-API effects (cursor writing, slashes, drums)
 
 - **Cue/slash notation is fully buildable via the API** (all in `elements.h`):
@@ -282,6 +317,30 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   macro (form focus trap) — the `cursor.add` path needs no `cmd()`. Melody pitches
   still can't be shown on a drum staff (dropped) — the cue is rhythm on a fixed
   carrier pitch (any valid drum pitch; voice is now set explicitly).
+
+## Accidentals (`note.accidentalType` can silently RETUNE the note)
+
+- `note.accidentalType = X` is not a cosmetic property — it routes to
+  `EditNote::changeAccidental` (`src/engraving/editing/editnote.cpp`), which
+  **recomputes the pitch** from the staff line + the accidental in force
+  (`measure->findAccidental`) and undo-changes it. Setting `Accidental.NONE` on a
+  note whose accidental was *required* therefore transposes it. **Guard every
+  write: capture `note.pitch`, write, and roll back if it moved** (see
+  `effects.js` `_setAccidental`/`_clearAccidental`).
+- Setting a type that matches the pitch already sounding takes the `forceAdd`
+  branch: the accidental is (re)created with `AccidentalRole::USER` and drawn
+  unconditionally — that is exactly a courtesy/cautionary accidental, and
+  MuseScore won't garbage-collect it.
+- Bracketing is a property of the **Accidental element**, not the note:
+  `note.accidental.accidentalBracket = 0|1|2` (none/parenthesis/bracket —
+  `dom/accidental.h`), readable only after the accidental exists.
+- Reading state: `note.tpc` is the **written** spelling, `note.tpc1` the concert
+  one (use `tpc1` for the Cb/B# octave correction so transposing staves work),
+  `note.tieBack` marks a tie continuation (never needs an accidental), and
+  `cursor.keySignature` is the signed sharp count in force **for the cursor's
+  staff** — so set `staffIdx`/`voice` before rewinding to read it.
+- Unpitched percussion staves have no meaningful accidentals — skip them (find
+  them via the part's `drumset`).
 
 ## Legacy dialogs + notation `cmd()` (focus/context trap — pre-bundle)
 
