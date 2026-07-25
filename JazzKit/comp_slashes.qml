@@ -8,7 +8,8 @@ import "lib/jazzkit.js" as JazzKit
 import "lib/effects.js" as Effects
 
 // Extension "form" action (see manifest.json). Single self-contained dialog: pick
-// instruments AND apply. The source rhythm is written as slash notation via the
+// instruments AND apply. The source rhythm (with its articulations and fermatas)
+// is written as slash notation via the
 // cursor + direct API (Effects.compSlashesNotes replicates Chord::setSlash) — no
 // notation cmd()s — so it runs from the form (a clipboard/cmd path could not; see
 // api-gotchas).
@@ -43,7 +44,8 @@ MuseScore {
 
     function effectCtx() {
         return {
-            curScore: curScore, Element: Element, Cursor: Cursor,
+            curScore: curScore, newElement: newElement,
+            Element: Element, Cursor: Cursor,
             Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam,
             division: division
         };

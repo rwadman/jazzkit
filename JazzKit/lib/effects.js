@@ -74,7 +74,8 @@ function _emptyRestRegions(ctx, selStart, selEnd, staffIdx) {
 
 // --- To Comp Cues (direct-API, no clipboard) --------------------------------
 // Write the source melody note-for-note into voice 1 of each pitched target,
-// cue-sized, carrying only articulations (accents/staccato/…) — NOT the slurs,
+// cue-sized, carrying only articulations (accent/staccato/tenuto/…) and the
+// segment's fermatas — NOT the slurs,
 // dynamics, text, etc. a clipboard paste drags along. Being pure cursor/API (no
 // cmd()), this runs from a form, so the picker + apply live in one dialog.
 //
@@ -84,11 +85,35 @@ function _emptyRestRegions(ctx, selStart, selEnd, staffIdx) {
 // barline). Drum targets are left to the slash path (handled separately).
 
 /**
+ * Symbols of the fermatas attached at `segment` in `track`. A fermata is NOT a
+ * chord articulation — it lives in the SEGMENT's annotations (dom/fermata.cpp,
+ * Segment::annotations), so it has to be read and written separately from
+ * `chord.articulations`, and it can sit on a rest.
+ * @param {EffectCtx} ctx  needs Element
+ * @returns {*[]}  SymId values
+ */
+function _readFermatas(ctx, segment, track) {
+    var out = [];
+    if (!segment) return out;
+    var ann = segment.annotations || [];
+    for (var i = 0; i < ann.length; ++i) {
+        var a = ann[i];
+        if (!a || a.type !== ctx.Element.FERMATA) continue;
+        if (a.track !== undefined && a.track !== track) continue;   // other staff/voice
+        out.push(a.symbol);
+    }
+    return out;
+}
+
+/**
  * Read the source voice-1 chord/rests across [selStart, selEnd) as plain data.
+ * `accents` are the chord's articulations (staccato, tenuto, accent, …);
+ * `fermatas` are the segment's, read for rests too.
  * @param {EffectCtx} ctx  needs curScore, Cursor, Element
- * @returns {{num:number,den:number,isRest:boolean,pitches:number[],accents:*[]}[]}
+ * @returns {{num:number,den:number,isRest:boolean,pitches:number[],accents:*[],fermatas:*[]}[]}
  */
 function _readSourceCRs(ctx, selStart, selEnd, srcStaffIdx) {
+    var track = srcStaffIdx * 4;   // voice 1
     var cursor = ctx.curScore.newCursor();
     cursor.staffIdx = srcStaffIdx;   // set track BEFORE rewind (api-gotchas)
     cursor.voice = 0;
@@ -101,7 +126,8 @@ function _readSourceCRs(ctx, selStart, selEnd, srcStaffIdx) {
             var item = {
                 tick: cursor.tick,   // absolute start tick (for tick-aligned pass 2)
                 num: el.duration.numerator, den: el.duration.denominator,
-                isRest: el.type === ctx.Element.REST, pitches: [], accents: []
+                isRest: el.type === ctx.Element.REST, pitches: [], accents: [],
+                fermatas: _readFermatas(ctx, cursor.segment, track)
             };
             if (el.type === ctx.Element.CHORD) {
                 var notes = el.notes || [];
@@ -114,6 +140,49 @@ function _readSourceCRs(ctx, selStart, selEnd, srcStaffIdx) {
         cursor.next();
     }
     return out;
+}
+
+/**
+ * source tick -> the markings to reproduce there. A source note whose duration
+ * crosses a barline is written as several TIED slices, so the writers walk by
+ * TICK: the markings land on the slice that starts at the source tick (the head
+ * of the tie group), never on the tail.
+ * @param {{tick:number,isRest:boolean,accents:*[],fermatas:*[]}[]} src
+ */
+function _markingsByTick(src) {
+    var at = {};
+    for (var i = 0; i < src.length; ++i) {
+        var cr = src[i];
+        var accents = cr.isRest ? [] : (cr.accents || []);
+        var fermatas = cr.fermatas || [];
+        if (accents.length || fermatas.length) at[cr.tick] = { accents: accents, fermatas: fermatas };
+    }
+    return at;
+}
+
+/**
+ * Reproduce one source position's markings on a written chord/rest: articulations
+ * onto the chord (`chord.add` == what Cursor::add does for ARTICULATION), fermatas
+ * onto the segment at the cursor's track (`cursor.add`, the default branch).
+ * A rest takes the fermatas only — articulations need a chord.
+ * @param {EffectCtx} ctx  needs newElement, Element
+ */
+function _addMarkings(ctx, cursor, chord, marks) {
+    if (!marks) return;
+    var accents = marks.accents || [];
+    for (var a = 0; chord && a < accents.length; ++a) {
+        if (accents[a] === undefined) continue;
+        var art = ctx.newElement(ctx.Element.ARTICULATION);
+        art.symbol = accents[a];
+        chord.add(art);
+    }
+    var fermatas = marks.fermatas || [];
+    for (var f = 0; f < fermatas.length; ++f) {
+        if (fermatas[f] === undefined) continue;
+        var fer = ctx.newElement(ctx.Element.FERMATA);
+        fer.symbol = fermatas[f];
+        cursor.add(fer);   // attaches to the segment at the cursor
+    }
 }
 
 function _gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) { var t = b; b = a % b; a = t; } return a || 1; }
@@ -170,15 +239,12 @@ function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
         }
     }
 
-    // Pass 2 — cue-size + articulations. A source note whose duration crosses a
-    // barline was written as several TIED slices, so there can be more target
-    // chords than source notes. Walk by TICK (not index): every cue chord in the
-    // range is cue-sized, and a source note's accents go on the slice that starts
-    // at that note's tick (the head of the tie group).
-    var accentAt = {};   // absolute source tick -> accents[]
-    for (var m = 0; m < src.length; ++m) {
-        if (!src[m].isRest && src[m].accents.length) accentAt[src[m].tick] = src[m].accents;
-    }
+    // Pass 2 — cue-size + markings (articulations + fermatas). A source note whose
+    // duration crosses a barline was written as several TIED slices, so there can be
+    // more target chords than source notes: walk by TICK (not index) — every cue
+    // chord in the range is cue-sized, the markings go on the slice starting at the
+    // source tick.
+    var markAt = _markingsByTick(src);
 
     var c2 = ctx.curScore.newCursor();
     c2.staffIdx = staffIdx;
@@ -186,18 +252,9 @@ function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
     c2.rewindToTick(selStart);
     while (c2.segment && c2.tick < selEnd) {
         var wel = c2.element;
-        if (wel && wel.type === ctx.Element.CHORD) {
-            try { wel.small = true; } catch (e) { }
-            var acc = accentAt[c2.tick];
-            if (acc) {
-                for (var a = 0; a < acc.length; ++a) {
-                    if (acc[a] === undefined) continue;
-                    var art = ctx.newElement(ctx.Element.ARTICULATION);
-                    art.symbol = acc[a];
-                    c2.add(art);   // attaches to the chord at the cursor
-                }
-            }
-        }
+        var isChord = !!wel && wel.type === ctx.Element.CHORD;
+        if (isChord) { try { wel.small = true; } catch (e) { } }
+        _addMarkings(ctx, c2, isChord ? wel : null, markAt[c2.tick]);
         c2.next();
     }
 }
@@ -309,12 +366,18 @@ function _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src
         else cur.addNote(pitch, false);
     }
 
+    // Pass 2 — slash-ify, and carry the source's markings (staccato, tenuto,
+    // fermata, …) onto the matching slash / rest, by tick as in _writeCueInto.
+    var markAt = _markingsByTick(src);
     var c2 = ctx.curScore.newCursor();
     c2.staffIdx = staffIdx;
     c2.voice = 0;
     c2.rewindToTick(selStart);
     while (c2.segment && c2.tick < selEnd) {
-        if (c2.element && c2.element.type === ctx.Element.CHORD) _applySlashChord(ctx, c2.element, false, 4);
+        var wel = c2.element;
+        var isChord = !!wel && wel.type === ctx.Element.CHORD;
+        if (isChord) _applySlashChord(ctx, wel, false, 4);
+        _addMarkings(ctx, c2, isChord ? wel : null, markAt[c2.tick]);
         c2.next();
     }
 }
@@ -411,15 +474,17 @@ function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
     // boundary at measureTick) then switch to voice V and walk the shell. Since the
     // shell fully tiles the measure, each note-beat swap is exact — no reflow shifts
     // the segments the cursor still has to visit.
+    var markAt = _markingsByTick(src);
     var wc = ctx.curScore.newCursor();
     wc.staffIdx = staffIdx;
     wc.voice = 0;
     wc.rewindToTick(measureTick);
     wc.voice = V;
     while (wc.segment && wc.tick < selEnd) {
+        var chord = null;
         if (noteTicks[wc.tick] && wc.element && wc.element.type === ctx.Element.REST) {
             var restDur = wc.element.duration;          // capture before replacing
-            var chord = ctx.newElement(ctx.Element.CHORD);
+            chord = ctx.newElement(ctx.Element.CHORD);
             var note = ctx.newElement(ctx.Element.NOTE);
             note.pitch = pitch;
             chord.add(note);
@@ -427,6 +492,10 @@ function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
             try { chord.duration = restDur; } catch (e) { }   // fix invalid duration
             _applyDrumCueChord(ctx, chord);
         }
+        // Markings go on the chord we just built (a plugin-owned chord is already in
+        // the score after wc.add, so chord.add undo-adds normally); fermatas via the
+        // cursor, onto the segment.
+        if (wc.tick >= selStart) _addMarkings(ctx, wc, chord, markAt[wc.tick]);
         wc.next();
     }
 }

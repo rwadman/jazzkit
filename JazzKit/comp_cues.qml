@@ -11,7 +11,7 @@ import "lib/effects.js" as Effects
 // pick instruments AND apply, in one gesture. The cue is written note-for-note
 // via the cursor + direct API (Effects.compCuesNotes) — no notation cmd()s — so
 // it runs from the form (which a clipboard copy/paste could NOT, see api-gotchas)
-// and carries only notes + articulations, not slurs/dynamics/text.
+// and carries only notes + articulations + fermatas, not slurs/dynamics/text.
 MuseScore {
     id: root
     implicitWidth: 360
