@@ -211,6 +211,36 @@ MuseScore {
         return out;
     }
 
+    // Raw `symbol` of each articulation on a chord. Compare against BOTH placement
+    // variants: MuseScore re-picks the above/below glyph for the chord it lands on
+    // (layoutArticulations → setUpArticulations), so a copied articTenutoAbove can
+    // legitimately read back as articTenutoBelow.
+    function artSyms(chord) {
+        var out = [];
+        var arts = chord ? (chord.articulations || []) : [];
+        for (var i = 0; i < arts.length; ++i) out.push(arts[i].symbol);
+        return out;
+    }
+    function hasArt(chord, symAbove, symBelow) {
+        var syms = artSyms(chord);
+        return syms.indexOf(symAbove) !== -1 || syms.indexOf(symBelow) !== -1;
+    }
+
+    // Number of FERMATA annotations on the segment at `tick` belonging to `track`.
+    function fermataCount(track, tick) {
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            for (var s = m.firstSegment; s; s = s.nextInMeasure) {
+                if (s.segmentType !== Segment.ChordRest || s.tick !== tick) continue;
+                var ann = s.annotations || [];
+                var n = 0;
+                for (var i = 0; i < ann.length; ++i)
+                    if (ann[i] && ann[i].type === Element.FERMATA
+                        && (ann[i].track === undefined || ann[i].track === track)) ++n;
+                return n;
+            }
+        return 0;
+    }
+
     // ---- fixture lifecycle (mutating) ---------------------------------------
     // Direct-API edits (appendPart/appendMeasures/cursor writes) are safe to group
     // in one startCmd/endCmd — only dispatched cmd()s must run standalone (gotchas).
@@ -288,6 +318,20 @@ MuseScore {
         c.staffIdx = staffIdx; c.voice = 0;
         c.rewind(Cursor.SCORE_START);
         for (var i = 0; i < pitches.length; ++i) { c.setDuration(1, 4); c.addNote(pitches[i]); }
+        curScore.endCmd();
+    }
+
+    // Mark the source chord at (staffIdx, tick): one articulation on the chord and
+    // one fermata on its segment — the two things a comp must carry over (they live
+    // in different places: chord.articulations vs segment.annotations).
+    function markSource(staffIdx, tick, artSym, fermataSym) {
+        curScore.startCmd();
+        var ch = chordAt(staffIdx, tick);
+        if (ch) { var a = newElement(Element.ARTICULATION); a.symbol = artSym; ch.add(a); }
+        var c = curScore.newCursor();
+        c.staffIdx = staffIdx; c.voice = 0;
+        c.rewindToTick(tick);
+        var f = newElement(Element.FERMATA); f.symbol = fermataSym; c.add(f);
         curScore.endCmd();
     }
 
@@ -544,6 +588,8 @@ MuseScore {
         var barStart = m.firstSegment.tick;
         var selStart = barStart + 480;   // beat 2
         var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        // Beat 2 carries a staccato + a fermata: the comp must reproduce both.
+        markSource(src, selStart, SymId.articStaccatoAbove, SymId.fermataAbove);
 
         var res = Effects.compSlashesNotes(effectCtx(), {
             selStart: selStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src, targets: [tgt]
@@ -560,6 +606,18 @@ MuseScore {
                 ch ? "fixed=" + ch.notes[0].fixed : "no chord");
         H.check(r, "compSlashesNotes: slash does not play", ch && ch.notes[0].play === false,
                 ch ? "play=" + ch.notes[0].play : "no chord");
+        // Markings carried over: the staccato onto the slash chord, the fermata onto
+        // its segment (a fermata is a segment annotation, not a chord articulation).
+        H.check(r, "compSlashesNotes: source staccato copied onto the slash",
+                hasArt(ch, SymId.articStaccatoAbove, SymId.articStaccatoBelow),
+                "articulations=[" + artSyms(ch).join(",") + "]");
+        H.check(r, "compSlashesNotes: source fermata copied", fermataCount(tgt * 4, selStart) === 1,
+                "fermatas=" + fermataCount(tgt * 4, selStart));
+        // …and only where the source had them: beat 3 stays bare.
+        var beat3 = artSyms(chordAt(tgt, selStart + 480));
+        H.check(r, "compSlashesNotes: unmarked beat stays bare",
+                beat3.length === 0 && fermataCount(tgt * 4, selStart + 480) === 0,
+                "articulations=[" + beat3.join(",") + "] fermatas=" + fermataCount(tgt * 4, selStart + 480));
     }
 
     // To Comp Slashes into a DRUM staff — regression for "no notes on the drum
@@ -603,6 +661,7 @@ MuseScore {
         var barStart = m.firstSegment.tick;
         var selStart = barStart + 480;          // beat 2 (mid-measure)
         var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        markSource(src, selStart, SymId.articTenutoAbove, SymId.fermataAbove);
 
         var res = Effects.compCuesNotes(effectCtx(), {
             selStart: selStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src,
@@ -625,6 +684,12 @@ MuseScore {
                 "cue chords=" + chordCount(selStart, selEnd, tgt * 4) + " | tgt v0: " + dumpVoice(tgt, 0, selEnd));
         H.check(r, "compCuesNotes: chord is cue-size", atSel && atSel.small === true,
                 (atSel ? "small=" + atSel.small : "no chord") + " | tgt all-voice@480: " + dumpTick(tgt, selStart));
+        H.check(r, "compCuesNotes: source tenuto copied",
+                hasArt(atSel, SymId.articTenutoAbove, SymId.articTenutoBelow),
+                "articulations=[" + artSyms(atSel).join(",") + "] want "
+                + SymId.articTenutoAbove + "/" + SymId.articTenutoBelow);
+        H.check(r, "compCuesNotes: source fermata copied", fermataCount(tgt * 4, selStart) === 1,
+                "fermatas=" + fermataCount(tgt * 4, selStart));
     }
 
     // The chord at (staffIdx, voice, tick), or null.
@@ -651,6 +716,7 @@ MuseScore {
         var m = curScore.firstMeasure;
         var barStart = m.firstSegment.tick;
         var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        markSource(src, barStart, SymId.articStaccatoAbove, SymId.fermataAbove);
 
         var res = Effects.compCuesNotes(effectCtx(), {
             selStart: barStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src,
@@ -682,6 +748,13 @@ MuseScore {
                 ch ? "headGroup=" + ch.notes[0].headGroup + " normal=" + NoteHeadGroup.HEAD_NORMAL : "no chord");
         H.check(r, "compCuesNotes drum: stems up", ch && ch.stemDirection === Direction.UP,
                 ch ? "stemDirection=" + ch.stemDirection + " up=" + Direction.UP + " down=" + Direction.DOWN : "no chord");
+        // The cue chord is built by cursor.add in voice 3, so its markings must be
+        // attached to that chord/track — not left on the voice-1 rest shell.
+        H.check(r, "compCuesNotes drum: source staccato copied",
+                hasArt(ch, SymId.articStaccatoAbove, SymId.articStaccatoBelow),
+                "articulations=[" + artSyms(ch).join(",") + "]");
+        H.check(r, "compCuesNotes drum: source fermata copied",
+                fermataCount(drum * 4 + voice, barStart) === 1, "fermatas=" + fermataCount(drum * 4 + voice, barStart));
     }
 
     // Compact dump of ONE voice of a staff across [from, to].

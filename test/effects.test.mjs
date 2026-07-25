@@ -5,7 +5,7 @@ const Effects = loadQmlLib("../JazzKit/lib/effects.js", "effectsLib");
 
 const DIV = 480;                 // ticks per quarter note
 const WHOLE = DIV * 4;           // 1920
-const Element = { CHORD: 1, REST: 2, ARTICULATION: 3 };
+const Element = { CHORD: 1, REST: 2, ARTICULATION: 3, FERMATA: 4 };
 
 // --- ticksToFraction (pure: the numeric core of the mid-measure split) ------
 
@@ -26,9 +26,10 @@ test("ticksToFraction: division defaults to 480 when omitted", () => {
 // spanning segment (this is what makes the mid-measure positioning testable).
 
 function frac(ticks) { return { ticks, numerator: Effects.ticksToFraction(ticks, DIV).z, denominator: Effects.ticksToFraction(ticks, DIV).n }; }
-function restEl(dur) { return { type: Element.REST, duration: frac(dur), notes: [], articulations: [], small: false }; }
+// `add` mirrors Chord::addInternal (what cursor.add does for an ARTICULATION).
+function restEl(dur) { return { type: Element.REST, duration: frac(dur), notes: [], articulations: [], small: false, add(el) { this.articulations.push(el); } }; }
 function chordEl(dur, pitches, accents) {
-    return { type: Element.CHORD, duration: frac(dur), notes: pitches.map((p) => ({ pitch: p })), articulations: (accents || []).map((s) => ({ symbol: s })), small: false };
+    return { type: Element.CHORD, duration: frac(dur), notes: pitches.map((p) => ({ pitch: p })), articulations: (accents || []).map((s) => ({ symbol: s })), small: false, add(el) { this.articulations.push(el); } };
 }
 
 class FakeCursor {
@@ -39,7 +40,14 @@ class FakeCursor {
         for (let k = 0; k < segs.length; k++) if (segs[k].tick <= t) i = k;
         this._i = i; this.tick = segs.length ? segs[i].tick : t;
     }
-    get segment() { return this._i < this._segs.length ? { tick: this._segs[this._i].tick } : null; }
+    get track() { return this.staffIdx * 4 + this.voice; }
+    // The real Segment carries the fermatas (annotations); the chord carries the articulations.
+    get segment() {
+        if (this._i >= this._segs.length) return null;
+        const s = this._segs[this._i];
+        if (!s.annotations) s.annotations = [];
+        return s;
+    }
     get element() { return this._i < this._segs.length ? this._segs[this._i].el : null; }
     next() { this._i++; const s = this._segs; this.tick = this._i < s.length ? s[this._i].tick : Infinity; return this._i < s.length; }
     setDuration(z, n) { this._dur = { z, n }; }
@@ -49,7 +57,19 @@ class FakeCursor {
         if (addToChord && this._lastChord) { this._lastChord.notes.push({ pitch }); this.score.ops.push({ op: "addToChord", staff: this.staffIdx, pitch }); return; }
         this._write("chord", [pitch], this._durTicks());
     }
-    add(el) { const cur = this.element; if (cur) cur.articulations.push(el); this.score.ops.push({ op: "accent", staff: this.staffIdx, tick: this.tick, sym: el.symbol }); }
+    // Cursor::add: a FERMATA goes to the segment (default branch), an ARTICULATION to the chord.
+    add(el) {
+        if (el.type === Element.FERMATA) {
+            const seg = this.segment;
+            if (!seg) return;
+            el.track = this.track;
+            seg.annotations.push(el);
+            this.score.ops.push({ op: "fermata", staff: this.staffIdx, tick: this.tick, sym: el.symbol });
+            return;
+        }
+        const cur = this.element; if (cur) cur.articulations.push(el);
+        this.score.ops.push({ op: "accent", staff: this.staffIdx, tick: this.tick, sym: el.symbol });
+    }
     // Like MuseScore note input: a duration crossing a barline (multiple of WHOLE)
     // is written as several tied slices, one per measure.
     _write(kind, pitches, Dtot) {
@@ -102,6 +122,20 @@ function scenario() {
     ];
     score.staves[1] = [{ tick: 0, dur: WHOLE, el: restEl(WHOLE) }];
     return score;
+}
+
+// Same, plus a fermata on the beat-2 source chord's SEGMENT and one on the
+// beat-3 REST (fermatas are segment annotations, so a rest can carry one).
+function markedScenario() {
+    const score = scenario();
+    const fer = (t) => ({ type: Element.FERMATA, symbol: "fer", track: 0 });
+    score.staves[0][0].annotations = [fer()];   // chord @480
+    score.staves[0][1].annotations = [fer()];   // rest  @960
+    return score;
+}
+function fermatasAt(score, staff, tick) {
+    const seg = score.staves[staff].find((s) => s.tick === tick);
+    return ((seg && seg.annotations) || []).filter((a) => a.type === Element.FERMATA).map((a) => a.symbol);
 }
 
 // --- compCuesNotes: mid-measure positioning ---------------------------------
@@ -180,6 +214,62 @@ test("compCuesNotes: a drum target gets a slash-rhythm comp, not a pitched cue",
     eq(chords.map((c) => c.tick), [480, 1440]);
     eq(chords.every((c) => c.el.notes[0].headGroup === "HEAD_SLASH"), true);   // slashed, not cue-size
     eq(chords.every((c) => c.el.small !== true), true);
+});
+
+// --- markings (articulations + fermatas) carried by every comp path ---------
+
+test("compCuesNotes: fermatas are copied onto the cue — including over a rest", () => {
+    const score = markedScenario();
+    Effects.compCuesNotes(makeCtx(score), {
+        selStart: 480, selEnd: 1920, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    eq(fermatasAt(score, 1, 480), ["fer"]);    // on the cue chord's segment
+    eq(fermatasAt(score, 1, 960), ["fer"]);    // …and over the rest
+    eq(fermatasAt(score, 1, 1440), []);        // nowhere else
+});
+
+test("compSlashesNotes: slashes carry the source articulations and fermatas", () => {
+    const score = markedScenario();
+    const res = Effects.compSlashesNotes(makeCtx(score), {
+        selStart: 480, selEnd: 1920, measureTick: 0, srcStaffIdx: 0, targets: [1],
+    });
+    eq(res.targetsDone, 1);
+    const slash = score.staves[1].find((s) => s.tick === 480);
+    eq(slash.el.notes[0].headGroup, "HEAD_SLASH");
+    eq(slash.el.articulations.map((a) => a.symbol), ["acc"]);   // accent onto the slash
+    eq(fermatasAt(score, 1, 480), ["fer"]);
+    eq(fermatasAt(score, 1, 960), ["fer"]);                     // fermata over the rest
+    // The unmarked beat-4 slash stays bare.
+    const bare = score.staves[1].find((s) => s.tick === 1440);
+    eq(bare.el.articulations.length, 0);
+    eq(fermatasAt(score, 1, 1440), []);
+});
+
+test("compCuesNotes: markings land on the tie HEAD slice, never the tail", () => {
+    const score = new FakeScore();
+    // A half note with an accent + fermata on beat 4, spilling into bar 2.
+    score.staves[0] = [{
+        tick: 1440, dur: 960, el: chordEl(960, [64], ["acc"]),
+        annotations: [{ type: Element.FERMATA, symbol: "fer", track: 0 }],
+    }];
+    score.staves[1] = [
+        { tick: 0, dur: WHOLE, el: restEl(WHOLE) },
+        { tick: WHOLE, dur: WHOLE, el: restEl(WHOLE) },
+    ];
+    Effects.compCuesNotes(makeCtx(score), {
+        selStart: 1440, selEnd: 2400, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    eq(fermatasAt(score, 1, 1440), ["fer"]);
+    eq(fermatasAt(score, 1, 1920), []);        // tail slice unmarked
+});
+
+test("markings from another staff's fermata are not copied", () => {
+    const score = markedScenario();
+    score.staves[0][2].annotations = [{ type: Element.FERMATA, symbol: "other", track: 8 }];  // staff 2
+    Effects.compCuesNotes(makeCtx(score), {
+        selStart: 480, selEnd: 1920, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    eq(fermatasAt(score, 1, 1440), []);
 });
 
 test("compCuesNotes: empty selection reports an error, writes nothing", () => {
