@@ -6,15 +6,6 @@
 // from those names alone; effects.js keeps the mutations.
 
 /**
- * The decision the Fix Marcato Staccatos plugin acts on for one chord.
- * @typedef {Object} Classification
- * @property {boolean} hasMarcato
- * @property {number[]} staccatoIndices   Indices into the input names of existing staccatos
- *                                        (empty on a marcato chord = one must be added).
- * @property {boolean} addAbove           Prefer the above (vs below) staccato variant.
- */
-
-/**
  * Read the raw symbol off an articulation: its `.symbol` (a SymId value or a
  * name string, version-dependent) or, failing that, its string form.
  * @param {MS.Articulation|null|undefined} a
@@ -94,7 +85,7 @@ function _hasAny(list, names) {
 /**
  * Classify one chord from the canonical symbol-name strings present on it.
  * @param {string[]} [names]
- * @returns {Classification}
+ * @returns {JK.Classification}
  */
 function classifyChord(names) {
     names = names || [];

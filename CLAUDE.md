@@ -48,7 +48,12 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   guarded `exports =` trailer so an extension macro could `require()` it. The
   external MuseScore API shapes are modelled in `JazzKit/lib/musescore.d.ts`
   (`declare namespace MS` — verified, *not* authoritative; grep the source before
-  trusting a shape). tsconfig drops the DOM lib (else `Selection` etc. collide).
+  trusting a shape); **our own** DTOs live in `JazzKit/lib/jazzkit.d.ts`
+  (`declare namespace JK` — authoritative, since tsc checks every constructor
+  against it). A shape crossing two libs goes in `JK`; one private to a lib stays
+  a local `@typedef`. tsconfig is `strict` (plus `noUnusedLocals`/`Parameters`),
+  so every lib param needs a JSDoc `@param`. It drops the DOM lib (else
+  `Selection` etc. collide).
   Types the **libs only** — `tsc` can't read `.qml`.
 - `harness/InfoDialog.qml` — the "JazzKit says…" popup (`show(msg)`), **dev-only**:
   the harness shows its report with it, the shipping forms render their result

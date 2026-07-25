@@ -36,6 +36,9 @@ function check(r, label, ok, detail) {
  * Record a case that couldn't run (e.g. the fixture lacks what it needs). Skips
  * don't fail the run, but they aren't successes — the summary calls them out.
  * @param {Report} r
+ * @param {string} label
+ * @param {string} [detail]
+ * @returns {void}
  */
 function skip(r, label, detail) {
     r.cases.push({ label: label, status: "skip", detail: detail || "" });

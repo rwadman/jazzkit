@@ -40,11 +40,11 @@
  * every measure is its own box. Returns index ranges into the input; the .qml
  * maps them back to measure objects.
  * @param {number[]} measureTicks
- * @param {Object<number, boolean>|null} boxStarts
- * @returns {{ firstIdx: number, lastIdx: number, musicBars: number }[]}
+ * @param {{[tick:number]: boolean|undefined}|null} boxStarts
+ * @returns {JK.BoxGroup[]}
  */
 function groupBoxes(measureTicks, boxStarts) {
-    /** @type {{ firstIdx: number, lastIdx: number, musicBars: number }[]} */
+    /** @type {JK.BoxGroup[]} */
     var groups = [];
     var cur = null;
     for (var i = 0; i < measureTicks.length; i++) {
