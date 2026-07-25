@@ -67,8 +67,8 @@ function guardScore(curScore, major, minor) {
  * measure's start tick (the writers rewind there, not to selStart — see effects.js)
  * and the staff. `Cursor` is the QML enum, injected (a stateless lib can't see it).
  * @param {MS.Score} curScore
- * @param {*} Cursor
- * @returns {{ok:boolean, error?:string, selStart?:number, selEnd?:number, measureTick?:number, staffIdx?:number}}
+ * @param {JK.QmlEnum} Cursor
+ * @returns {JK.SelectionRange}
  */
 function captureSingleStaffRange(curScore, Cursor) {
     var sel = curScore.selection;
@@ -154,7 +154,7 @@ function computeTargets(parts, srcStaffIdx, savedIds) {
  * remember and the target rows to hand an effect. Both comp actions take the same
  * `{staffIdx, isDrum}` shape.
  * @param {TargetRow[]} rows
- * @returns {{ids:string[], targets:{staffIdx:number, isDrum:boolean}[]}}
+ * @returns {JK.SelectedTargets}
  */
 function selectedTargets(rows) {
     var ids = [], targets = [];
@@ -225,7 +225,7 @@ var AUTOFIX_DEFAULTS = { marcato: true, courtesy: true, bracket: 1 };
  * Autofix settings for a score, with every missing/garbled field filled from the
  * defaults (so a partially-written tag can never disable a fix by accident).
  * @param {MS.Score|null|undefined} curScore
- * @returns {{marcato:boolean, courtesy:boolean, bracket:number}}
+ * @returns {JK.AutofixSettings}
  */
 function loadAutofixSettings(curScore) {
     var s = loadJsonTag(curScore, AUTOFIX_TAG) || {};
@@ -242,7 +242,7 @@ function loadAutofixSettings(curScore) {
  * Persist Autofix settings (normalised first, so what we write is what a later
  * load returns).
  * @param {MS.Score|null|undefined} curScore
- * @param {{marcato:boolean, courtesy:boolean, bracket:number}} settings
+ * @param {JK.AutofixSettings} settings
  * @returns {void}
  */
 function saveAutofixSettings(curScore, settings) {

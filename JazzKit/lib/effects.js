@@ -19,21 +19,21 @@
  * @property {(type:number)=>*} newElement  QML newElement(Element.X) — required by
  *   every effect that builds elements (cues, drum cues, staccatos, line breaks);
  *   non-optional here so those calls type-check without a guard.
- * @property {*} JazzKit    jazzkit.js  (countStaves)
- * @property {*} Slashes    slashes.js  (emptyRestRegions — pure, unit-tested)
- * @property {*} [Articulations] articulations.js (classifyChord — pure, unit-tested)
- * @property {*} [Accidentals] accidentals.js (planStaff — pure, unit-tested)
- * @property {*} Segment    QML Segment enum
- * @property {*} Element    QML Element enum
- * @property {*} Cursor     QML Cursor enum
+ * @property {JK.JazzKitLib} JazzKit    jazzkit.js  (countStaves)
+ * @property {JK.SlashesLib} Slashes    slashes.js  (emptyRestRegions — pure, unit-tested)
+ * @property {JK.ArticulationsLib} Articulations articulations.js (classifyChord — pure, unit-tested)
+ * @property {JK.AccidentalsLib} Accidentals accidentals.js (planStaff — pure, unit-tested)
+ * @property {JK.QmlEnum} Segment    QML Segment enum
+ * @property {JK.QmlEnum} Element    QML Element enum
+ * @property {JK.QmlEnum} Cursor     QML Cursor enum
  * @property {number} [division]  ticks per quarter note (MuseScore global)
- * @property {*} [Direction]    QML Direction enum (stem direction)
- * @property {*} [NoteHeadGroup] QML NoteHeadGroup enum (HEAD_SLASH, …)
- * @property {*} [Beam]         QML Beam enum (beam mode)
- * @property {*} [SymId]        QML SymId enum
- * @property {*} [BarLineType]  QML BarLineType enum
- * @property {*} [LayoutBreak]  QML LayoutBreak enum
- * @property {*} [Accidental]   QML Accidental enum (NONE, FLAT, NATURAL, SHARP, …)
+ * @property {JK.QmlEnum} Direction    QML Direction enum (stem direction)
+ * @property {JK.QmlEnum} NoteHeadGroup QML NoteHeadGroup enum (HEAD_SLASH, …)
+ * @property {JK.QmlEnum} Beam         QML Beam enum (beam mode)
+ * @property {MS.SymId} SymId          QML SymId enum
+ * @property {JK.QmlEnum} [BarLineType]  QML BarLineType enum
+ * @property {JK.QmlEnum} LayoutBreak  QML LayoutBreak enum
+ * @property {JK.QmlEnum} Accidental   QML Accidental enum (NONE, FLAT, NATURAL, SHARP, …)
  */
 
 /**
@@ -102,11 +102,11 @@ function _cursorAt(ctx, staffIdx, voice, tick) {
  * @param {number} selStart
  * @param {number} selEnd    exclusive
  * @param {number} staffIdx
- * @returns {{start:number,end:number}[]}
+ * @returns {JK.Region[]}
  */
 function _emptyRestRegions(ctx, selStart, selEnd, staffIdx) {
     var track = staffIdx * 4; // voice 1
-    /** @type {*[]} */
+    /** @type {JK.MeasureRests[]} */
     var measures = [];
     /** @type {MS.Segment|null} */
     var seg;
@@ -115,7 +115,7 @@ function _emptyRestRegions(ctx, selStart, selEnd, staffIdx) {
 
     while (m && m.firstSegment && m.firstSegment.tick < selEnd) {
         var ts = m.timesigNominal;
-        /** @type {{tick:number, durTicks:number}[]} */
+        /** @type {JK.Rest[]} */
         var rests = [];
         for (seg = m.firstSegment; seg; seg = seg.nextInMeasure) {
             if (seg.segmentType !== ctx.Segment.ChordRest) continue;
@@ -243,7 +243,7 @@ function _markingsByTick(src) {
  * A rest takes the fermatas only — articulations need a chord.
  * @param {EffectCtx} ctx  needs newElement, Element
  * @param {MS.Cursor} cursor
- * @param {*} chord     the written chord, or null on a rest
+ * @param {MS.Element|null} chord  the written chord, or null on a rest
  * @param {Marks} [marks]
  * @returns {void}
  */
@@ -272,7 +272,7 @@ function _gcd(a, b) { a = Math.abs(a); b = Math.abs(b); while (b) { var t = b; b
  * numeric core of the mid-measure split, unit-tested.
  * @param {number} ticks
  * @param {number} [division]  ticks per quarter note; defaults to 480
- * @returns {{z:number, n:number}}
+ * @returns {JK.Fraction}
  */
 function ticksToFraction(ticks, division) {
     var whole = (division || 480) * 4;
@@ -337,7 +337,7 @@ function _writeSource(ctx, cur, selStart, src, writeCR) {
  * @param {number} selStart
  * @param {number} selEnd   exclusive
  * @param {MarksByTick} markAt
- * @param {(cursor:MS.Cursor, element:MS.Element|null)=>*} atCR  the chord the
+ * @param {(cursor:MS.Cursor, element:MS.Element|null)=>MS.Element|null} atCR  the chord the
  *   markings belong on, or null for a rest
  * @returns {void}
  */
@@ -384,8 +384,8 @@ function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
  * get the source rhythm as a slash comp (the same slash writer as To Comp Slashes,
  * which handles the drumset's valid-pitch/voice constraints).
  * @param {EffectCtx} ctx  needs curScore, newElement, Element, Cursor, Direction, NoteHeadGroup, division
- * @param {*} params  { selStart, selEnd, measureTick, srcStaffIdx, targets }
- * @returns {{targetsDone:number, error:string}}
+ * @param {JK.CompParams} params
+ * @returns {JK.CompResult}
  */
 function compCuesNotes(ctx, params) {
     var src = _readSourceCRs(ctx, params.selStart, params.selEnd, params.srcStaffIdx);
@@ -462,7 +462,7 @@ function _slashPitch(ctx, staffIdx, wantVoice) {
  * the middle line. stemless=false keeps the stem (rhythmic slashes); true drops it
  * (beat slashes).
  * @param {EffectCtx} ctx  needs Direction, NoteHeadGroup, Beam
- * @param {*} chord
+ * @param {MS.Element} chord
  * @param {boolean} stemless
  * @param {number} line   staff line for the notehead (4 = middle of a 5-line staff)
  * @returns {void}
@@ -549,7 +549,7 @@ function _drumCuePitch(ctx, staffIdx) {
 
 /** Dress a written chord as a drum cue note (cue-size, silent, stem up, above staff,
  *  NORMAL notehead).
- *  @param {EffectCtx} ctx @param {*} chord @returns {void} */
+ *  @param {EffectCtx} ctx @param {MS.Element} chord @returns {void} */
 function _applyDrumCueChord(ctx, chord) {
     _trySet(chord, "small", true);
     _trySet(chord, "stemDirection", ctx.Direction.UP);
@@ -649,8 +649,8 @@ function _measureStartOrEnd(ctx, m) {
  * `{staffIdx, isDrum}` object compCuesNotes takes (`isDrum` is irrelevant here — the
  * slash writer already picks a valid drum pitch), so both forms share one row shape.
  * @param {EffectCtx} ctx  needs curScore, Element, Cursor, Direction, NoteHeadGroup, division
- * @param {*} params  { selStart, selEnd, measureTick, srcStaffIdx, targets }
- * @returns {{targetsDone:number, error:string}}
+ * @param {JK.SlashParams} params
+ * @returns {JK.CompResult}
  */
 function compSlashesNotes(ctx, params) {
     var src = _readSourceCRs(ctx, params.selStart, params.selEnd, params.srcStaffIdx);
@@ -730,7 +730,7 @@ function _writeBeatSlashes(ctx, staffIdx, start, end, beat) {
  * @param {number} selStart
  * @param {number} selEnd   exclusive
  * @param {number} staffIdx
- * @returns {{regions:number, filled:number, selectFailed:boolean}}
+ * @returns {JK.FillResult}
  */
 function fillEmptyBeatsNotes(ctx, selStart, selEnd, staffIdx) {
     var regions = _emptyRestRegions(ctx, selStart, selEnd, staffIdx);
@@ -764,6 +764,7 @@ function fillEmptyBeatsNotes(ctx, selStart, selEnd, staffIdx) {
  * @returns {boolean}
  */
 function _tryAddHiddenStaccato(ctx, cursor, wantAbove) {
+    /** @type {MS.SymIdValue[]} */
     var candidates = [];
     try { candidates = ctx.Articulations.staccatoCandidates(ctx.SymId, wantAbove); } catch (e) { candidates = []; }
 
@@ -789,9 +790,9 @@ function _tryAddHiddenStaccato(ctx, cursor, wantAbove) {
 /**
  * For a marcato chord, hide any existing staccatos or add a hidden one.
  * @param {EffectCtx} ctx
- * @param {*} el
+ * @param {MS.Element|null} el
  * @param {MS.Cursor} cursor
- * @returns {{added:number, hidden:number}}
+ * @returns {JK.StaccatoResult}
  */
 function _processMarcatoStaccato(ctx, el, cursor) {
     var result = { added: 0, hidden: 0 };
@@ -820,7 +821,7 @@ function _processMarcatoStaccato(ctx, el, cursor) {
  * Ensure every marcato chord in the score carries a (hidden) staccato: walk all
  * staves/voices/chords once inside a single startCmd/endCmd.
  * @param {EffectCtx} ctx
- * @returns {{added:number, hidden:number}}
+ * @returns {JK.StaccatoResult}
  */
 function fixMarcatoStaccatos(ctx) {
     ctx.curScore.startCmd();
@@ -873,7 +874,7 @@ function _isDrumStaff(ctx, staffIdx) {
 
 /** Append plain note data (+ the live objects, index-aligned) for one chord.
  *  @param {MS.Note[]|undefined} notes
- *  @param {*[]} data  plain data for Accidentals.planStaff
+ *  @param {JK.NoteData[]} data  plain data for Accidentals.planStaff
  *  @param {MS.Note[]} live  index-aligned live notes to apply the plan to
  *  @returns {void} */
 function _pushNoteData(notes, data, live) {
@@ -896,14 +897,14 @@ function _pushNoteData(notes, data, live) {
  * whole staff, not one voice), grace notes ahead of the chord they decorate.
  * @param {EffectCtx} ctx  needs curScore, Segment, Element
  * @param {number} staffIdx
- * @returns {{measures:*[], live:MS.Note[]}}
+ * @returns {{measures:JK.MeasureData[], live:MS.Note[]}}
  */
 function _readStaffForAccidentals(ctx, staffIdx) {
     var cursor = ctx.curScore.newCursor();
     cursor.staffIdx = staffIdx;      // set track BEFORE rewind (api-gotchas)
     cursor.voice = 0;
 
-    /** @type {*[]} */
+    /** @type {JK.MeasureData[]} */
     var measures = [];
     /** @type {MS.Note[]} */
     var live = [];
@@ -914,7 +915,7 @@ function _readStaffForAccidentals(ctx, staffIdx) {
         // Voice 1 always has content, so this lands on the measure start and the
         // cursor can report the key signature in force there.
         cursor.rewindToTick(m.firstSegment.tick);
-        /** @type {*[]} */
+        /** @type {JK.NoteData[]} */
         var notes = [];
         for (seg = m.firstSegment; seg; seg = seg.nextInMeasure) {
             if (seg.segmentType !== ctx.Segment.ChordRest) continue;
@@ -980,7 +981,7 @@ function _clearAccidental(ctx, note) {
  * @param {EffectCtx} ctx  needs curScore, Segment, Element, Accidental, JazzKit, Accidentals
  * @param {{bracket?:number}} [opts]  accidentalBracket for ADDED courtesies
  *                                    (0 none, 1 parenthesis, 2 bracket)
- * @returns {{added:number, removed:number, skipped:number}}
+ * @returns {JK.CourtesyResult}
  */
 function fixCourtesyAccidentals(ctx, opts) {
     var bracket = (opts && opts.bracket !== undefined) ? opts.bracket : 1;
@@ -996,8 +997,12 @@ function fixCourtesyAccidentals(ctx, opts) {
             var d = plan[i];
             var note = read.live[d.index];
             if (!note) continue;
+            // planStaff always names the accidental on an "add"; a decision that
+            // somehow lacks one is counted as skipped rather than indexing the
+            // Accidental enum with undefined.
             var ok = (d.action === "add")
-                ? _setAccidental(ctx, note, d.accidentalType, d.courtesy ? bracket : 0)
+                ? (d.accidentalType !== undefined &&
+                    _setAccidental(ctx, note, d.accidentalType, d.courtesy ? bracket : 0))
                 : _clearAccidental(ctx, note);
             if (!ok) ++total.skipped;
             else if (d.action === "add") ++total.added;
@@ -1017,9 +1022,9 @@ function fixCourtesyAccidentals(ctx, opts) {
  * Clear every existing layout break in `measures`, then add a LINE break to each
  * measure in `breakMeasures`. One startCmd/endCmd (a single logical edit).
  * @param {EffectCtx} ctx
- * @param {*[]} measures        measures whose existing breaks are cleared
- * @param {*[]} breakMeasures   measures to attach a new LINE break to
- * @returns {{removed:number, added:number}}
+ * @param {MS.Measure[]} measures    measures whose existing breaks are cleared
+ * @param {MS.Measure[]} breakMeasures  measures to attach a new LINE break to
+ * @returns {JK.LineBreakResult}
  */
 function applyLineBreaks(ctx, measures, breakMeasures) {
     ctx.curScore.startCmd();

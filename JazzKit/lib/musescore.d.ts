@@ -105,6 +105,11 @@ declare namespace MS {
     interface Measure {
         firstSegment: Segment | null;
         nextMeasure: Measure | null;
+        /** Elements attached to the measure (layout breaks, …). */
+        elements: any[];
+        /** Attach / detach an attached element (a LAYOUT_BREAK, for line breaks). */
+        add(element: any): void;
+        remove(element: any): void;
         /** Nominal time signature of the measure. */
         timesigNominal: { numerator: number; denominator: number; ticks: number };
     }
@@ -139,6 +144,9 @@ declare namespace MS {
         noStem?: boolean;
         /** Beam mode (a Beam enum value). */
         beamMode?: any;
+        /** Attach a child element — on a Chord this is what Cursor::add does for
+         *  an ARTICULATION, and how a plugin-built chord takes its note. */
+        add(element: any): void;
     }
 
     /** A note within a chord. */
@@ -154,10 +162,11 @@ declare namespace MS {
         /** Whether the note sounds on playback. */
         play?: boolean;
         visible?: boolean;
-        /** Written tonal pitch class (the spelling shown on this staff). */
-        tpc?: number;
+        /** Written tonal pitch class (the spelling shown on this staff). Always
+         *  present on a real note — the accidental planner relies on it. */
+        tpc: number;
         /** Concert-pitch tonal pitch class (spelling before transposition). */
-        tpc1?: number;
+        tpc1: number;
         /** The engraved accidental, or null. Read-only; write via accidentalType. */
         accidental?: Accidental | null;
         /** Accidental enum value. Writing it routes through

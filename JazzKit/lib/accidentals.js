@@ -64,7 +64,7 @@ function accidentalNameForTpc(tpc) {
  * @param {number} pitch  MIDI pitch
  * @param {number} tpc    written tpc (spelling shown on this staff)
  * @param {number} tpc1   concert-pitch tpc
- * @returns {{noteClass:string, noteName:string}}
+ * @returns {JK.NoteClass}
  */
 function noteClassOf(pitch, tpc, tpc1) {
     var octave = Math.floor(pitch / 12);
@@ -91,35 +91,6 @@ function keyNameForLetter(letter, keySig) {
 }
 
 /**
- * One note as planStaff sees it.
- * @typedef {Object} NoteData
- * @property {number} pitch
- * @property {number} tpc     written tpc
- * @property {number} tpc1    concert tpc
- * @property {boolean} hasAccidental   an accidental is currently engraved on it
- * @property {boolean} [tiedBack]      continuation of a tie (never needs one)
- */
-
-/**
- * One measure of one staff: its key signature and its notes in tick/track order
- * (grace notes before the chord they decorate, all voices merged).
- * @typedef {Object} MeasureData
- * @property {number} keySig
- * @property {NoteData[]} notes
- */
-
-/**
- * What to do with one note. `index` is its position in the flattened note stream
- * (measure by measure, in the order given) so the caller can pair a decision back
- * with the live API object.
- * @typedef {Object} AccidentalDecision
- * @property {number} index
- * @property {"add"|"remove"} action
- * @property {string} [accidentalType]  Accidental enum member name (adds only).
- * @property {boolean} [courtesy]       True when the add is a reminder, not required.
- */
-
-/**
  * Plan the accidental edits for ONE staff.
  *
  * Per measure we track `cur[noteClass] = noteName` (what is currently sounding)
@@ -134,13 +105,13 @@ function keyNameForLetter(letter, keySig) {
  * A key change wipes the carry-over (the new signature already re-states things).
  *
  * Notes with no decision are simply absent from the result.
- * @param {MeasureData[]} measures
- * @returns {AccidentalDecision[]}
+ * @param {JK.MeasureData[]} measures
+ * @returns {JK.AccidentalDecision[]}
  */
 function planStaff(measures) {
-    /** @type {AccidentalDecision[]} */
+    /** @type {JK.AccidentalDecision[]} */
     var out = [];
-    /** @type {Object<string,string>} */
+    /** @type {{[noteClass:string]: string|undefined}} */
     var prev = {};
     var index = 0;
     var prevKeySig = null;
@@ -151,7 +122,7 @@ function planStaff(measures) {
         if (prevKeySig !== null && keySig !== prevKeySig) prev = {};
         prevKeySig = keySig;
 
-        /** @type {Object<string,string>} */
+        /** @type {{[noteClass:string]: string|undefined}} */
         var cur = {};
         var notes = measure.notes || [];
         for (var ni = 0; ni < notes.length; ++ni) {

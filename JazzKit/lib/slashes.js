@@ -6,31 +6,14 @@
 // math and whole-beat alignment, and effects.js slash-fills the returned regions.
 
 /**
- * One rest segment in voice 1: its start tick and duration in ticks.
- * @typedef {Object} Rest
- * @property {number} tick
- * @property {number} durTicks
- */
-
-/**
- * A measure reduced to what region-finding needs.
- * @typedef {Object} MeasureRests
- * @property {number} mStart        Tick of the measure's first segment.
- * @property {number} numerator     Time-signature numerator.
- * @property {number} denominator   Time-signature denominator.
- * @property {number} measureTicks  Total ticks in the measure (timesig.ticks).
- * @property {Rest[]} rests         Voice-1 rest segments, in order.
- */
-
-/**
  * Merge consecutive rests that abut (one ends exactly where the next begins)
  * into single spans. A voice-1 note between two rests breaks contiguity, so
  * distinct empty runs stay distinct; only splits from other voices are healed.
- * @param {Rest[]} rests  in tick order
- * @returns {Rest[]}
+ * @param {JK.Rest[]} rests  in tick order
+ * @returns {JK.Rest[]}
  */
 function coalesceRests(rests) {
-    /** @type {Rest[]} */
+    /** @type {JK.Rest[]} */
     var out = [];
     for (var i = 0; i < rests.length; i++) {
         var r = rests[i];
@@ -69,13 +52,13 @@ function beatTicks(numerator, denominator, measureTicks) {
  * comp cue) fragments the shared segments. Without this, a voice-3 rhythm splits
  * voice 1's rest into off-beat pieces that each fail the whole-beat test, so a
  * genuinely-empty voice 1 would be skipped.
- * @param {MeasureRests[]} measures
+ * @param {JK.MeasureRests[]} measures
  * @param {number} selStart
  * @param {number} selEnd
- * @returns {{ start: number, end: number }[]}
+ * @returns {JK.Region[]}
  */
 function emptyRestRegions(measures, selStart, selEnd) {
-    /** @type {{ start: number, end: number }[]} */
+    /** @type {JK.Region[]} */
     var regions = [];
     for (var i = 0; i < measures.length; i++) {
         var m = measures[i];
