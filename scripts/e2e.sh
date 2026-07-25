@@ -17,8 +17,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Opt-in automation (local dev only — needs Accessibility permission for the
 # controlling terminal; see below). Both default off so the manual path is
 # unchanged.
+# Both refuse to run when a MuseScore is already open (we'd script/kill the wrong
+# instance and lose the developer's unsaved work).
 #   --autoclick   drive Plugins ▸ harness via UI scripting (implies --kill)
-#   --kill        force-kill MuseScore on exit
+#   --kill        force-kill the MuseScore WE launched on exit
 #   --no-kill     cancel the implied --kill from --autoclick
 AUTOCLICK=0
 KILL=""              # unset => defaults to AUTOCLICK below
@@ -41,6 +43,21 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$KILL" ] || KILL="$AUTOCLICK"   # --kill defaults to whatever --autoclick is
+
+MS_MATCH="MuseScore 4.app/Contents/MacOS"
+MS_PID=""            # set after launch; the ONLY process we may kill
+
+# Killing (and the session.json swap below) is only safe when no MuseScore of the
+# user's own is running: their unsaved scores would go with it, and the blanked
+# session.json would take crash recovery down too. Refuse rather than risk it.
+if [ "$KILL" = "1" ] || [ "$AUTOCLICK" = "1" ]; then
+  if pgrep -f "$MS_MATCH" >/dev/null 2>&1; then
+    echo "MuseScore is already running. --autoclick/--kill would target the wrong" >&2
+    echo "instance and could lose unsaved work. Quit MuseScore first, or run" >&2
+    echo "$(basename "$0") with no flags (manual mode)." >&2
+    exit 1
+  fi
+fi
 
 # MuseScore records its open scores here while running and empties it on a clean
 # quit. A kill -9 leaves it populated, so the NEXT launch shows a crash-recovery
@@ -67,11 +84,13 @@ restore_session() {
   SESSION_BAK=""
 }
 
-# Force-kill MuseScore. We only ever opened a throwaway COPY, so a hard kill can
-# never lose real work and it sidesteps the "Save changes?" dialog entirely. Once
-# it's gone we put the user's real session.json back.
+# Force-kill ONLY the instance we launched ($MS_PID, captured right after `open`).
+# That instance holds nothing but our throwaway COPY of the fixture, so a hard kill
+# can't lose real work and it sidesteps the "Save changes?" dialog entirely. Never
+# pkill by name: that would also take out a MuseScore the developer started (see the
+# already-running guard above). Once it's gone we put the real session.json back.
 kill_app() {
-  pkill -9 -f "MuseScore 4.app/Contents/MacOS" 2>/dev/null || true
+  if [ -n "$MS_PID" ]; then kill -9 "$MS_PID" 2>/dev/null || true; fi
   restore_session
 }
 
@@ -105,6 +124,16 @@ cp "$FIXTURE" "$WORK"
 # can't leave MuseScore flagged as unclean; restored by kill_app once it's dead.
 [ "$KILL" = "1" ] && backup_session
 open -na "/Applications/MuseScore 4.app" "$WORK"
+
+# Remember the process `open` just spawned so kill_app can target it and nothing
+# else. `-n` = newest match; we guaranteed above that no other instance exists on
+# the kill path, and `open` is synchronous enough that the process is up by now
+# (retry briefly in case it isn't).
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  MS_PID="$(pgrep -n -f "$MS_MATCH" 2>/dev/null || true)"
+  if [ -n "$MS_PID" ]; then break; fi
+  sleep 1
+done
 
 if [ "$AUTOCLICK" = "1" ]; then
   # Drive the Plugins menu via UI scripting. Needs Accessibility permission for

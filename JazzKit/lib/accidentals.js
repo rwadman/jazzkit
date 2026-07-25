@@ -1,14 +1,11 @@
 // @ts-check
 // Pure courtesy-accidental logic for the Autofix action.
 //
-// No MuseScore API here. The effect layer (effects.js) reads each staff as plain
-// data — one entry per sounding note, in tick/track order, grouped by measure —
-// and hands it to planStaff, which decides per note whether an accidental must be
-// ADDED (required, or a courtesy carried over from the previous bar), REMOVED
-// (present but superfluous) or left alone. Every decision below is a plain
-// function testable in Node; effects.js only executes them.
-//
-//   QML:  import "lib/accidentals.js" as Accidentals
+// No MuseScore API here: effects.js reads each staff as plain data — one entry per
+// sounding note, in tick/track order, grouped by measure — and planStaff decides
+// per note whether an accidental must be ADDED (required, or a courtesy carried
+// over from the previous bar), REMOVED (superfluous) or left alone; effects.js
+// only executes the plan.
 //
 // Model (same one MuseScore engraves by, and the one the shipped
 // `courtesy_accidentals` extension uses):
@@ -210,5 +207,5 @@ var accidentalsLib = {
     planStaff: planStaff
 };
 
-// require()-able from an extension macro; no-op under QML import / Node loader.
+// Export trailer — MANDATORY, see api-gotchas "macros actions".
 if (typeof exports !== "undefined") { exports = accidentalsLib; }

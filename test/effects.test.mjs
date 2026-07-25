@@ -245,6 +245,24 @@ test("compSlashesNotes: slashes carry the source articulations and fermatas", ()
     eq(fermatasAt(score, 1, 1440), []);
 });
 
+// Both comp forms hand over the same `targets` rows, so compSlashesNotes takes the
+// bare staff index the harness/older callers pass AND compCuesNotes's {staffIdx,…}.
+test("compSlashesNotes: accepts a bare staff index and a {staffIdx} row alike", () => {
+    const write = (targets) => {
+        const score = scenario();
+        const res = Effects.compSlashesNotes(makeCtx(score), {
+            selStart: 480, selEnd: 1920, measureTick: 0, srcStaffIdx: 0, targets,
+        });
+        eq(res.targetsDone, 1);
+        return score.staves[1].filter((s) => s.el.type === Element.CHORD)
+            .map((c) => [c.tick, c.el.notes[0].headGroup]);
+    };
+    const expected = [[480, "HEAD_SLASH"], [1440, "HEAD_SLASH"]];
+    eq(write([1]), expected);
+    eq(write([{ staffIdx: 1, isDrum: false }]), expected);
+    eq(write([{ staffIdx: 1, isDrum: true }]), expected);   // isDrum is the slash writer's business
+});
+
 test("compCuesNotes: markings land on the tie HEAD slice, never the tail", () => {
     const score = new FakeScore();
     // A half note with an accent + fermata on beat 4, spilling into bar 2.

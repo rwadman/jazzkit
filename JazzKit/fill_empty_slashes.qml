@@ -33,28 +33,14 @@ MuseScore {
     // "nothing to fill" / partial fill — sets resultText and returns false so the
     // window stays up.
     function runEffect() {
-        if (!curScore) { root.resultText = qsTr("Open a score first."); return false; }
-        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion)) {
-            root.resultText = qsTr("This plugin is for MuseScore 4.4 or later"); return false;
-        }
+        var guard = JazzKit.guardScore(curScore, mscoreMajorVersion, mscoreMinorVersion);
+        if (guard !== "") { root.resultText = guard; return false; }
 
-        var sel = curScore.selection;
-        if (!sel || !sel.isRange || sel.elements.length === 0) {
-            root.resultText = qsTr("Please select a range of notes first."); return false;
-        }
-        if (sel.endStaff - sel.startStaff !== 1) {
-            root.resultText = qsTr("Please select notes in a single staff only."); return false;
-        }
+        // (sel.measureTick is unused here — we fill in place, never before selStart.)
+        var sel = JazzKit.captureSingleStaffRange(curScore, Cursor);
+        if (!sel.ok) { root.resultText = sel.error; return false; }
 
-        var staffIdx = sel.startStaff;
-        var cursor = curScore.newCursor();
-        cursor.rewind(Cursor.SELECTION_START);
-        var selStart = cursor.tick;
-        cursor.rewind(Cursor.SELECTION_END);
-        var selEnd = cursor.tick;
-        if (selEnd === 0) selEnd = curScore.lastSegment.tick + 1;
-
-        var res = Effects.fillEmptyBeatsNotes(effectCtx(), selStart, selEnd, staffIdx);
+        var res = Effects.fillEmptyBeatsNotes(effectCtx(), sel.selStart, sel.selEnd, sel.staffIdx);
         if (res.regions === 0) {
             root.resultText = qsTr("No empty beats in voice 1 to fill."); return false;
         } else if (res.selectFailed) {

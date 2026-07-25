@@ -48,7 +48,11 @@ declare namespace MS {
     interface Selection {
         selectRange(startTick: number, endTick: number, startStaff: number, endStaff: number): void;
         isRange?: boolean;
-        startStaff?: number;
+        /** Selected elements; empty even on a "range" when nothing is inside it. */
+        elements: any[];
+        startStaff: number;
+        /** One past the last selected staff (exclusive). */
+        endStaff: number;
     }
 
     /** A part's private score, carrying its own metatags. */
@@ -63,11 +67,8 @@ declare namespace MS {
         excerpts?: Excerpt[];
         metaTag(tag: string): string;
         setMetaTag(tag: string, value: string): void;
-        // Staff count — MuseScore versions spell it several ways (see countStaves).
+        /** Staff count (the documented name on 4.4+ — see countStaves). */
         nstaves?: number;
-        nStaves?: number;
-        staffCount?: number;
-        staves?: { length: number };
         newCursor(): Cursor;
         firstMeasure: Measure | null;
         lastSegment: Segment;

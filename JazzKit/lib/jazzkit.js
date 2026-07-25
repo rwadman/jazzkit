@@ -22,6 +22,9 @@
  * @property {boolean} checked
  */
 
+/** The one wording for the version refusal — shared by every entry point. */
+var MIN_VERSION_TEXT = "This plugin is for MuseScore 4.4 or later";
+
 /**
  * All JazzKit plugins require MuseScore 4.4+.
  * @param {number} major
@@ -35,19 +38,59 @@ function isSupportedVersion(major, minor) {
 }
 
 /**
- * Number of staves to iterate, tolerating the several names MuseScore versions
- * expose for it (nstaves / nStaves / staffCount / staves.length); 16 as a last
- * resort so a rename in a future version degrades to "process the first 16"
- * rather than nothing.
+ * Number of staves to iterate. `nstaves` is the documented name on 4.4+, which is
+ * the only range we run in; 0 (do nothing) if it's ever missing — callers use this
+ * as a `staffIdx` loop bound, so a guessed count would read staves that don't exist.
  * @param {MS.Score} score
  * @returns {number}
  */
 function countStaves(score) {
-    if (typeof score.nstaves === 'number') return score.nstaves;
-    if (typeof score.nStaves === 'number') return score.nStaves;
-    if (typeof score.staffCount === 'number') return score.staffCount;
-    if (score.staves && typeof score.staves.length === 'number') return score.staves.length;
-    return 16;
+    return score.nstaves || 0;
+}
+
+/**
+ * The shared entry guard: "" when the plugin may run, else the message to show.
+ * @param {MS.Score|null|undefined} curScore
+ * @param {number} major
+ * @param {number} minor
+ * @returns {string}
+ */
+function guardScore(curScore, major, minor) {
+    if (!curScore) return "Open a score first.";
+    if (!isSupportedVersion(major, minor)) return MIN_VERSION_TEXT;
+    return "";
+}
+
+/**
+ * The selection capture every range-based action starts with: verify there IS a
+ * single-staff range selection and read out its tick bounds, the containing
+ * measure's start tick (the writers rewind there, not to selStart — see effects.js)
+ * and the staff. `Cursor` is the QML enum, injected (a stateless lib can't see it).
+ * @param {MS.Score} curScore
+ * @param {*} Cursor
+ * @returns {{ok:boolean, error?:string, selStart?:number, selEnd?:number, measureTick?:number, staffIdx?:number}}
+ */
+function captureSingleStaffRange(curScore, Cursor) {
+    var sel = curScore.selection;
+    if (!sel || !sel.isRange || sel.elements.length === 0)
+        return { ok: false, error: "Please select a range of notes first." };
+    if (sel.endStaff - sel.startStaff !== 1)
+        return { ok: false, error: "Please select notes in a single staff only." };
+
+    var cursor = curScore.newCursor();
+    cursor.rewind(Cursor.SELECTION_START);
+    var selStart = cursor.tick;
+    var measureTick = cursor.measure.firstSegment.tick;
+    cursor.rewind(Cursor.SELECTION_END);
+    var selEnd = cursor.tick;
+    // A selection running to the end of the score reports tick 0 — treat it as "past
+    // the last segment" rather than an empty range.
+    if (selEnd === 0) selEnd = curScore.lastSegment.tick + 1;
+
+    return {
+        ok: true, selStart: selStart, selEnd: selEnd,
+        measureTick: measureTick, staffIdx: sel.startStaff
+    };
 }
 
 // Keywords that mark a chord/comping instrument we'd stamp a rhythm onto.
@@ -67,22 +110,6 @@ function isCompInstrument(part) {
     for (var i = 0; i < COMP_KEYWORDS.length; i++)
         if (id.indexOf(COMP_KEYWORDS[i]) !== -1) return true;
     return false;
-}
-
-/**
- * Select a single-staff range and confirm the selection actually landed on the
- * intended staff. The dispatched cmd()s act on curScore.selection, so a failed
- * selection must abort rather than run against the wrong staff.
- * @param {MS.Score} curScore
- * @param {number} startTick
- * @param {number} endTick
- * @param {number} staffIdx
- * @returns {boolean}
- */
-function selectStaffRange(curScore, startTick, endTick, staffIdx) {
-    curScore.selection.selectRange(startTick, endTick, staffIdx, staffIdx + 1);
-    var s = curScore.selection;
-    return !!(s && s.isRange && s.startStaff === staffIdx);
 }
 
 /**
@@ -117,6 +144,24 @@ function computeTargets(parts, srcStaffIdx, savedIds) {
         });
     }
     return rows;
+}
+
+/**
+ * Inverse of computeTargets: from the dialog's rows, the instrument ids to
+ * remember and the target rows to hand an effect. Both comp actions take the same
+ * `{staffIdx, isDrum}` shape.
+ * @param {TargetRow[]} rows
+ * @returns {{ids:string[], targets:{staffIdx:number, isDrum:boolean}[]}}
+ */
+function selectedTargets(rows) {
+    var ids = [], targets = [];
+    for (var i = 0; i < rows.length; ++i) {
+        var r = rows[i];
+        if (!r.checked) continue;
+        ids.push(r.instrumentId);
+        targets.push({ staffIdx: r.staffIdx, isDrum: !!r.isDrum });
+    }
+    return { ids: ids, targets: targets };
 }
 
 // --- Persisted dialog choices (MS's bundled QML has no Settings module) ------
@@ -208,12 +253,15 @@ function saveAutofixSettings(curScore, settings) {
 
 // Exposed for the Node test loader; QML reaches the functions by name directly.
 var jazzkitLib = {
+    MIN_VERSION_TEXT: MIN_VERSION_TEXT,
     isSupportedVersion: isSupportedVersion,
+    guardScore: guardScore,
+    captureSingleStaffRange: captureSingleStaffRange,
     countStaves: countStaves,
     COMP_KEYWORDS: COMP_KEYWORDS,
     isCompInstrument: isCompInstrument,
-    selectStaffRange: selectStaffRange,
     computeTargets: computeTargets,
+    selectedTargets: selectedTargets,
     loadJsonTag: loadJsonTag,
     saveJsonTag: saveJsonTag,
     AUTOFIX_TAG: AUTOFIX_TAG,
@@ -222,8 +270,5 @@ var jazzkitLib = {
     saveAutofixSettings: saveAutofixSettings
 };
 
-// Also expose as a CommonJS-style module so an extension macro can `require()`
-// this lib. `exports` is a global only in the extension's script engine; the QML
-// import and the Node test loader read the top-level declarations instead, and
-// the typeof guard keeps this a harmless no-op there.
+// Export trailer — MANDATORY, see api-gotchas "macros actions".
 if (typeof exports !== "undefined") { exports = jazzkitLib; }

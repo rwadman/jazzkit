@@ -38,15 +38,16 @@ for (const f of files) {
   if (brace !== 0) problems.push(`unbalanced braces (${brace > 0 ? "+" : ""}${brace})`);
   if (paren !== 0) problems.push(`unbalanced parens (${paren > 0 ? "+" : ""}${paren})`);
 
-  // Files under lib/ are reusable QML components, not plugins - they have no
-  // MuseScore{} root. Only the brace/paren check applies.
+  // A PascalCase filename is a reusable QML component (QML types are PascalCase,
+  // our plugin/action files are snake_case) - it has no MuseScore{} root, so only
+  // the brace/paren check applies. Same for anything under lib/.
   //
   // The JazzKit actions are extension "form" .qml (referenced by manifest.json):
   // a MuseScore{} root, but NO onRun (a form is loaded as a view — work runs from
   // Component.onCompleted / handlers) and NO menuPath (the manifest supplies the
   // menu entry). So we only require the MuseScore{} root here; menu wiring is
   // validated against manifest.json below.
-  const isComponent = /(^|\/)lib\//.test(f);
+  const isComponent = /(^|\/)lib\//.test(f) || /(^|\/)[A-Z][^/]*\.qml$/.test(f);
   if (!isComponent) {
     if (!/\bMuseScore\s*\{/.test(src)) problems.push("no MuseScore{} root element");
   }

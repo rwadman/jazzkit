@@ -17,6 +17,7 @@ export const TRACKED = [
     "harness/test_harness.qml",
     "harness/fixtures/blank.mscz",
     "JazzKit/lib/effects.js",
+    "JazzKit/lib/accidentals.js",
     "JazzKit/lib/articulations.js",
     "JazzKit/lib/linebreaks.js",
     "JazzKit/lib/slashes.js",

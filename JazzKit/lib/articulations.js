@@ -1,21 +1,16 @@
 // @ts-check
 // Pure articulation classification for Fix Marcato Staccatos.
 //
-// No MuseScore API here. The .qml resolves each articulation on a chord to a
-// canonical SymId *name* string (see _canonicalName there) and hands the list to
-// classifyChord; every decision below is a plain function testable in Node. The
-// .qml keeps the effects (hiding articulations, adding a hidden staccato).
-//
-//   QML:  import "lib/articulations.js" as Articulations
+// No MuseScore API here: effects.js resolves each articulation to a canonical
+// SymId *name* string (canonicalName/chordNames, below) and classifyChord decides
+// from those names alone; effects.js keeps the mutations.
 
 /**
  * The decision the Fix Marcato Staccatos plugin acts on for one chord.
  * @typedef {Object} Classification
- * @property {boolean} marcatoAbove
- * @property {boolean} marcatoBelow
  * @property {boolean} hasMarcato
- * @property {number[]} staccatoIndices   Indices into the input names of existing staccatos.
- * @property {boolean} needsStaccato      Marcato present but no staccato yet.
+ * @property {number[]} staccatoIndices   Indices into the input names of existing staccatos
+ *                                        (empty on a marcato chord = one must be added).
  * @property {boolean} addAbove           Prefer the above (vs below) staccato variant.
  */
 
@@ -105,21 +100,16 @@ function classifyChord(names) {
     names = names || [];
     var marcatoAbove = _hasAny(MARCATO_ABOVE, names);
     var marcatoBelow = _hasAny(MARCATO_BELOW, names);
-    var hasMarcato = marcatoAbove || marcatoBelow;
 
-    // Indices into `names` of existing staccatos — the .qml hides these in place.
+    // Indices into `names` of existing staccatos — effects.js hides these in place.
     /** @type {number[]} */
     var staccatoIndices = [];
     for (var i = 0; i < names.length; i++)
         if (STACCATO_NAMES.indexOf(names[i]) !== -1) staccatoIndices.push(i);
 
     return {
-        marcatoAbove: marcatoAbove,
-        marcatoBelow: marcatoBelow,
-        hasMarcato: hasMarcato,
+        hasMarcato: marcatoAbove || marcatoBelow,
         staccatoIndices: staccatoIndices,
-        // A marcato chord with no staccato yet needs a hidden one added.
-        needsStaccato: hasMarcato && staccatoIndices.length === 0,
         // Prefer the above/below variant matching the marcato placement.
         addAbove: marcatoAbove
     };
@@ -137,8 +127,5 @@ var articulationsLib = {
     classifyChord: classifyChord
 };
 
-// require()-able from an extension macro; no-op under QML import / Node loader.
-// NOT optional: `require` returns whatever the file assigned to the shared global
-// `exports`, so a lib without this trailer silently hands back the PREVIOUS
-// require's exports (this bit us — see api-gotchas, "macros actions").
+// Export trailer — MANDATORY, see api-gotchas "macros actions".
 if (typeof exports !== "undefined") { exports = articulationsLib; }

@@ -15,15 +15,15 @@ test("version gate: MS3 and 4.3 rejected, 4.4+ accepted", () => {
 
 // --- countStaves ------------------------------------------------------------
 
-test("countStaves prefers nstaves, then the fallbacks, in order", () => {
-    eq(JazzKit.countStaves({ nstaves: 4, nStaves: 9, staffCount: 9 }), 4);
-    eq(JazzKit.countStaves({ nStaves: 5, staffCount: 9 }), 5);
-    eq(JazzKit.countStaves({ staffCount: 6 }), 6);
-    eq(JazzKit.countStaves({ staves: { length: 7 } }), 7);
+test("countStaves reads nstaves", () => {
+    eq(JazzKit.countStaves({ nstaves: 4 }), 4);
 });
 
-test("countStaves falls back to 16 when nothing is exposed", () => {
-    eq(JazzKit.countStaves({}), 16);
+test("countStaves is 0 (process nothing) when nstaves is absent", () => {
+    // It's used as a staffIdx loop bound — a guessed count would walk staves that
+    // don't exist.
+    eq(JazzKit.countStaves({}), 0);
+    eq(JazzKit.countStaves({ nstaves: 0 }), 0);
 });
 
 // --- isCompInstrument -------------------------------------------------------
@@ -48,35 +48,68 @@ test("missing / empty part is not a comp instrument", () => {
     eq(JazzKit.isCompInstrument({ instrumentId: "" }), false);
 });
 
-// --- selectStaffRange (curScore injected as a fake) -------------------------
+// --- guardScore (the shared entry guard) ------------------------------------
 
-function fakeScore(result) {
-    const calls = [];
+test("guardScore: passes with a score on a supported version", () => {
+    eq(JazzKit.guardScore({}, 4, 4), "");
+});
+
+test("guardScore: no score wins over the version check", () => {
+    eq(JazzKit.guardScore(null, 3, 6), "Open a score first.");
+});
+
+test("guardScore: an old version reports the one canonical wording", () => {
+    eq(JazzKit.guardScore({}, 4, 3), JazzKit.MIN_VERSION_TEXT);
+    eq(JazzKit.MIN_VERSION_TEXT, "This plugin is for MuseScore 4.4 or later");
+});
+
+// --- captureSingleStaffRange (curScore + the Cursor enum injected) ----------
+
+const Cursor = { SCORE_START: 0, SELECTION_START: 1, SELECTION_END: 2 };
+
+// A score whose cursor reports `ticks[SELECTION_START]` / `ticks[SELECTION_END]`
+// and a measure starting at `measureTick`.
+function fakeRangeScore(sel, ticks, measureTick = 0, lastTick = 3840) {
     return {
-        calls,
-        selection: {
-            selectRange(a, b, s0, s1) {
-                calls.push([a, b, s0, s1]);
-                Object.assign(this, result);
-            }
+        selection: sel,
+        lastSegment: { tick: lastTick },
+        newCursor() {
+            return {
+                tick: 0,
+                measure: { firstSegment: { tick: measureTick } },
+                rewind(mode) { this.tick = ticks[mode]; }
+            };
         }
     };
 }
 
-test("selectStaffRange: uses [i, i+1) and confirms the landed staff", () => {
-    const sc = fakeScore({ isRange: true, startStaff: 2 });
-    eq(JazzKit.selectStaffRange(sc, 480, 1920, 2), true);
-    eq(sc.calls, [[480, 1920, 2, 3]]);
+const RANGE = { isRange: true, elements: [{}], startStaff: 2, endStaff: 3 };
+
+test("captureSingleStaffRange: reads the ticks, the measure start and the staff", () => {
+    const sc = fakeRangeScore(RANGE, { 1: 960, 2: 1920 }, 480);
+    eq(JazzKit.captureSingleStaffRange(sc, Cursor),
+        { ok: true, selStart: 960, selEnd: 1920, measureTick: 480, staffIdx: 2 });
 });
 
-test("selectStaffRange: aborts when selection lands on the wrong staff", () => {
-    const sc = fakeScore({ isRange: true, startStaff: 5 });
-    eq(JazzKit.selectStaffRange(sc, 0, 480, 2), false);
+test("captureSingleStaffRange: selEnd 0 means 'to the end of the score'", () => {
+    const sc = fakeRangeScore(RANGE, { 1: 960, 2: 0 }, 960, 3840);
+    eq(JazzKit.captureSingleStaffRange(sc, Cursor).selEnd, 3841);
 });
 
-test("selectStaffRange: aborts when the range didn't take", () => {
-    const sc = fakeScore({ isRange: false, startStaff: 2 });
-    eq(JazzKit.selectStaffRange(sc, 0, 480, 2), false);
+test("captureSingleStaffRange: no range selection", () => {
+    const err = { ok: false, error: "Please select a range of notes first." };
+    eq(JazzKit.captureSingleStaffRange(fakeRangeScore(null, {}), Cursor), err);
+    eq(JazzKit.captureSingleStaffRange(
+        fakeRangeScore({ isRange: false, elements: [{}], startStaff: 0, endStaff: 1 }, {}), Cursor), err);
+    // A "range" with nothing in it (e.g. selected past the last measure).
+    eq(JazzKit.captureSingleStaffRange(
+        fakeRangeScore({ isRange: true, elements: [], startStaff: 0, endStaff: 1 }, {}), Cursor), err);
+});
+
+test("captureSingleStaffRange: a multi-staff selection is refused", () => {
+    const sc = fakeRangeScore({ isRange: true, elements: [{}], startStaff: 0, endStaff: 2 }, {});
+    eq(JazzKit.captureSingleStaffRange(sc, Cursor),
+        { ok: false, error: "Please select notes in a single staff only." });
 });
 
 // --- computeTargets (comp dialog rows) --------------------------------------
@@ -99,6 +132,29 @@ test("computeTargets: only comp instruments, source staff excluded", () => {
     eq(rows.length, 1);
     eq(rows[0].staffIdx, 1);        // piano's top staff (startTrack 4 / 4)
     eq(rows[0].label, "Piano");
+});
+
+test("selectedTargets: only checked rows, as {staffIdx, isDrum} + their ids", () => {
+    const rows = [
+        { instrumentId: "keyboard.piano", staffIdx: 1, isDrum: false, checked: true },
+        { instrumentId: "pluck.bass", staffIdx: 2, isDrum: false, checked: false },
+        { instrumentId: "drumset", staffIdx: 3, isDrum: true, checked: true },
+    ];
+    eq(JazzKit.selectedTargets(rows), {
+        ids: ["keyboard.piano", "drumset"],
+        targets: [{ staffIdx: 1, isDrum: false }, { staffIdx: 3, isDrum: true }],
+    });
+});
+
+test("selectedTargets: nothing checked → empty lists", () => {
+    eq(JazzKit.selectedTargets([{ instrumentId: "x", staffIdx: 0, isDrum: false, checked: false }]),
+        { ids: [], targets: [] });
+    eq(JazzKit.selectedTargets([]), { ids: [], targets: [] });
+});
+
+test("selectedTargets: a missing isDrum is coerced to false", () => {
+    eq(JazzKit.selectedTargets([{ instrumentId: "x", staffIdx: 0, checked: true }]).targets,
+        [{ staffIdx: 0, isDrum: false }]);
 });
 
 test("computeTargets: null saved → all checked (first run)", () => {

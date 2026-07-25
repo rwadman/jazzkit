@@ -24,7 +24,8 @@ MuseScore {
     property string message: ""    // non-empty => show result instead of options
 
     function load() {
-        if (!curScore) { root.message = qsTr("Open a score first."); return; }
+        var guard = JazzKit.guardScore(curScore, mscoreMajorVersion, mscoreMinorVersion);
+        if (guard !== "") { root.message = guard; return; }
         var s = JazzKit.loadAutofixSettings(curScore);
         root.optMarcato = s.marcato;
         root.optCourtesy = s.courtesy;
@@ -32,7 +33,8 @@ MuseScore {
     }
 
     function save() {
-        if (!curScore) { root.message = qsTr("Open a score first."); return; }
+        var guard = JazzKit.guardScore(curScore, mscoreMajorVersion, mscoreMinorVersion);
+        if (guard !== "") { root.message = guard; return; }
         JazzKit.saveAutofixSettings(curScore, {
             marcato: root.optMarcato, courtesy: root.optCourtesy, bracket: root.valBracket
         });
@@ -55,47 +57,45 @@ MuseScore {
             wrapMode: Text.WordWrap
         }
 
-        // --- options view ---
-        StyledTextLabel {
+        // --- options view (one visibility binding for the whole set) ---
+        ColumnLayout {
             Layout.fillWidth: true
             visible: root.message === ""
-            text: qsTr("Fixes Autofix performs on the whole score:")
-            horizontalAlignment: Text.AlignLeft
-        }
-
-        CheckBox {
-            visible: root.message === ""
-            text: qsTr("Fix marcato staccatos")
-            checked: root.optMarcato
-            onClicked: root.optMarcato = !root.optMarcato
-        }
-        CheckBox {
-            visible: root.message === ""
-            text: qsTr("Courtesy accidentals (add missing, remove superfluous)")
-            checked: root.optCourtesy
-            onClicked: root.optCourtesy = !root.optCourtesy
-        }
-
-        RowLayout {
-            visible: root.message === "" && root.optCourtesy
             spacing: 12
-            StyledTextLabel { text: qsTr("Courtesy accidentals look like") }
-            RoundedRadioButton {
-                text: qsTr("(♮)")
-                checked: root.valBracket === 1
-                onClicked: root.valBracket = 1
+
+            StyledTextLabel {
+                Layout.fillWidth: true
+                text: qsTr("Fixes Autofix performs on the whole score:")
+                horizontalAlignment: Text.AlignLeft
             }
-            RoundedRadioButton {
-                text: qsTr("[♮]")
-                checked: root.valBracket === 2
-                onClicked: root.valBracket = 2
+
+            CheckBox {
+                text: qsTr("Fix marcato staccatos")
+                checked: root.optMarcato
+                onClicked: root.optMarcato = !root.optMarcato
             }
-            RoundedRadioButton {
-                text: qsTr("♮")
-                checked: root.valBracket === 0
-                onClicked: root.valBracket = 0
+            CheckBox {
+                text: qsTr("Courtesy accidentals (add missing, remove superfluous)")
+                checked: root.optCourtesy
+                onClicked: root.optCourtesy = !root.optCourtesy
             }
-            Item { Layout.fillWidth: true }
+
+            // MuseScore's AccidentalBracket values: 0 none, 1 parenthesis, 2 bracket.
+            RowLayout {
+                visible: root.optCourtesy
+                spacing: 12
+                StyledTextLabel { text: qsTr("Courtesy accidentals look like") }
+                Repeater {
+                    model: [{ label: "(♮)", value: 1 }, { label: "[♮]", value: 2 }, { label: "♮", value: 0 }]
+                    delegate: RoundedRadioButton {
+                        required property var modelData
+                        text: modelData.label
+                        checked: root.valBracket === modelData.value
+                        onClicked: root.valBracket = modelData.value
+                    }
+                }
+                Item { Layout.fillWidth: true }
+            }
         }
 
         Item { Layout.fillHeight: true }

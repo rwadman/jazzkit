@@ -1,13 +1,9 @@
 // @ts-check
 // Pure line-break placement for Format Line Breaks.
 //
-// No MuseScore API here. The .qml collects the visual boxes and reads the
-// structural facts it needs off each one (does it end with a double barline? a
-// repeat?) into plain data; this file decides which boxes get a break after
-// them and returns their indices. The .qml maps those indices back to measures
-// and attaches the LAYOUT_BREAKs.
-//
-//   QML:  import "lib/linebreaks.js" as LineBreaks
+// No MuseScore API here: line_breaks.qml reads each visual box's structural facts
+// (double barline? repeat?) into plain data, this file returns the indices of the
+// boxes that get a break, and effects.js:applyLineBreaks attaches the LAYOUT_BREAKs.
 
 /**
  * A visual box (what shows as one measure on the page; a multirest is one box).
@@ -193,6 +189,5 @@ var linebreaksLib = {
     computeBreaks: computeBreaks
 };
 
-// require()-able from an extension macro; no-op under QML import / Node loader.
-// Mandatory — see the note in articulations.js.
+// Export trailer — MANDATORY, see api-gotchas "macros actions".
 if (typeof exports !== "undefined") { exports = linebreaksLib; }

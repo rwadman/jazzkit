@@ -47,21 +47,25 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   (`declare namespace MS` — verified, *not* authoritative; grep the source before
   trusting a shape). tsconfig drops the DOM lib (else `Selection` etc. collide).
   Types the **libs only** — `tsc` can't read `.qml`.
-- `JazzKit/lib/InfoDialog.qml` — the shared "JazzKit says…" popup (`show(msg)`),
-  used by the dev harness (the shipping forms render their own result inline).
-  `sync.sh` deploys `lib/` automatically.
+- `harness/InfoDialog.qml` — the "JazzKit says…" popup (`show(msg)`), **dev-only**:
+  the harness shows its report with it, the shipping forms render their result
+  inline. It lives in `harness/` so it never ships; `sync.sh` likewise strips
+  `lib/*.d.ts` from the deployed bundle.
 - `test/` — Node unit tests for `JazzKit/lib/`. `load-qml-lib.mjs` evals a lib
   the way QML does (top-level decls → the `JazzKitExports` namespace) and injects
-  fakes; `harness.mjs` is a zero-dep runner (Node 16 has no `node --test`).
+  fakes; `harness.mjs` is a zero-dep runner (deliberate: no packages, no runner
+  config — Node ≥18, see `engines`).
 - `DrumsetPatterns-main/` — third-party reference plugin; working drum-staff
   cursor examples. `test-plugin/` — throwaway.
 
 ## Dev loop
 
 ```bash
+npm run verify    # test + typecheck + check + e2e:check — what CI runs
 npm test                              # unit-test JazzKit/lib (node test/run.mjs)
 npm run typecheck                     # JSDoc types on JazzKit/lib/*.js (tsc --checkJs, no build)
-node scripts/check-qml.mjs JazzKit/*.qml JazzKit/lib/*.qml
+npm run check                         # QML/manifest lint (JazzKit/ + harness/)
+npm run e2e:check                     # a passing GUI harness run is recorded for this code
 scripts/sync.sh   # deploy JazzKit → run from Plugins menu (GUI)
 scripts/e2e.sh [--autoclick]   # deploy both pkgs, open a blank fixture, launch MuseScore, (auto-)run the harness, print+accept its report
 scripts/mslog.sh          # what it did

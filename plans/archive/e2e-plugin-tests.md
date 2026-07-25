@@ -1,5 +1,9 @@
 # Plan A — End-to-end plugin test harness (one-click, in-GUI)
 
+> **ARCHIVED — IMPLEMENTED.** Shipped as `harness/test_harness.qml` + `scripts/e2e.sh`
+> and the acceptance gate (`scripts/e2e-{accept,fingerprint}.mjs`). Kept for history;
+> read the code, not this, for current behaviour.
+
 ## Goal
 A single command that opens MuseScore ready to test, and a **single menu click**
 that runs **every JazzKit plugin's real effect end-to-end** against auto-built

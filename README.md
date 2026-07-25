@@ -2,7 +2,7 @@
 
 A set of [MuseScore 4](https://musescore.org/) plugins that help me when arranging for jazz ensembles.
 
-Developed on MuseScore 4.7.3 (requires 4.1+), macOS / Apple Silicon.
+Developed on MuseScore 4.7.3 (requires 4.4+), macOS / Apple Silicon.
 
 > ⚠️ **These plugins are entirely vibe-coded.** Every line was written by an LLM
 > agent against the MuseScore plugin API, with light human steering. It works
@@ -12,8 +12,8 @@ Developed on MuseScore 4.7.3 (requires 4.1+), macOS / Apple Silicon.
 
 ## Plugins
 
-All entries appear under **Plugins** in the MuseScore menu (MuseScore 4 flattens
-submenus, so they sort alphabetically by title):
+JazzKit ships as a single extension with one multi-action manifest, so its entries
+nest under a **JazzKit** submenu in the MuseScore **Plugins** menu:
 
 | Menu entry | What it does |
 | --- | --- |
@@ -26,11 +26,15 @@ submenus, so they sort alphabetically by title):
 
 ## Install
 
-1. Copy the [`JazzKit/`](JazzKit/) folder into your MuseScore 4 plugins folder
-   (typically `~/Documents/MuseScore4/Plugins/`), so it lands at
-   `~/Documents/MuseScore4/Plugins/JazzKit/`.
+JazzKit is a MuseScore 4.4+ **extension**, so it goes in `extensions/`, not
+`Plugins/`.
+
+1. Copy the [`JazzKit/`](JazzKit/) folder into your MuseScore 4 user extensions
+   folder, so it lands at
+   `~/Library/Application Support/MuseScore/MuseScore4/extensions/JazzKit/`
+   (macOS; [`scripts/sync.sh`](scripts/sync.sh) does this for you).
 2. Restart MuseScore.
-3. Enable the plugins in **Home → Plugins** (one-time).
+3. Enable JazzKit in **Home → Plugins** (one-time).
 
 ## Development
 
@@ -41,13 +45,19 @@ debugging is log + crash-dump analysis. Dev tooling lives in
 and [`CLAUDE.md`](CLAUDE.md) documents the dev loop.
 
 ```bash
-# lint QML (catches silent-no-op syntax slips)
-node scripts/check-qml.mjs JazzKit/*.qml
+# everything CI runs: unit tests, typecheck, QML lint, e2e acceptance freshness
+npm run verify
 
-# deploy JazzKit/ → MuseScore's plugin folder (PLUGINS_FOLDER, or the default)
+# individually
+npm test           # Node unit tests for JazzKit/lib
+npm run typecheck  # JSDoc types (tsc --checkJs)
+npm run check      # QML/manifest lint (catches silent-no-op syntax slips)
+npm run e2e:check  # a passing GUI harness run is recorded for this exact code
+
+# deploy JazzKit/ → MuseScore's extensions folder (EXTENSIONS_FOLDER, or the default)
 scripts/sync.sh
 
-# launch MuseScore with logging → logs/musescore-run.log
+# launch MuseScore with logging → logs/musescore-run-<timestamp>.log
 scripts/start_ms.sh
 
 # newest MuseScore log, plugin-relevant lines (-f follow, -a all)
@@ -55,7 +65,8 @@ scripts/mslog.sh
 ```
 
 Copy `.env.example` to `.env` and set the paths for your machine — `sync.sh`
-(via `PLUGINS_FOLDER`) and `start_ms.sh` (via `MUSE_SCORE_FOLDER`) read it.
+(via `EXTENSIONS_FOLDER`), `sync-harness.sh` (via `PLUGINS_FOLDER`) and
+`start_ms.sh` (via `MUSE_SCORE_FOLDER`) read it.
 
 ## License
 
