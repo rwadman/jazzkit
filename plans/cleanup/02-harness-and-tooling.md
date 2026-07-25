@@ -107,9 +107,9 @@ next bump is one edit (see P5 in [01-plugin-code.md](01-plugin-code.md)).
 
 **Outcome:** All four fixed, and `JazzKit.MIN_VERSION_TEXT` now backs every UI string
 (forms + harness). `autofix.js` keeps its own log wording ("needs MuseScore 4.4 or later")
-— it's a log line with a test asserting it, not UI. **Unverified:** the menu-layout
-sentence follows CLAUDE.md (a "JazzKit" submenu); the GUI confirmation is
-[T5 (residual)](03-remaining.md#t5-residual--confirm-the-menu-layout).
+— it's a log line with a test asserting it, not UI. The menu-layout sentence (a "JazzKit"
+submenu) was **confirmed in the GUI** in the second pass, so no document needed correcting
+— see [T5 (residual)](03-remaining.md#t5-residual--confirm-the-menu-layout-done-gui-verified).
 
 ---
 
@@ -260,5 +260,5 @@ of several MuseScore crash reproductions.
 
 ---
 
-Open items from this document (the T5 menu-layout check) and the plugin-code side live in
-[03-remaining.md](03-remaining.md).
+What this document left open (the T5 menu-layout check) was closed in the second pass,
+along with the plugin-code side — see [03-remaining.md](03-remaining.md).

@@ -5,119 +5,121 @@ Everything from [01-plugin-code.md](01-plugin-code.md) and
 2026-07-25 cleanup pass. Those two documents now record only completed work; this one is
 the open list. IDs are kept so the earlier docs' cross-references still resolve.
 
-**All four actionable items need a running MuseScore.** That is the single reason they were
-deferred: MuseScore 4 has no headless plugin runner, so a QML/UI change can only be
-verified by clicking through it, and two of these touch user-facing dialogs where a silent
-break is the failure mode.
+**Status (2026-07-25, second pass): CLOSED — every item is resolved and GUI-verified.**
+R0, P11, P4 step 2 and T5 are done; P8c is **declined** — twice attempted, twice broken
+in the GUI, reverted to the shipping arithmetic (read that section before touching
+dialog sizing again). Nothing here is open; the sections below are the record.
 
 ---
 
-## R0 — Re-stamp the e2e acceptance (do this first)
+## R0 — Re-stamp the e2e acceptance — **DONE**
 
-`npm run e2e:check` currently **fails**, by design: T1 added `JazzKit/lib/accidentals.js`
-to the fingerprint and the effect layer was refactored, so the recorded run in
-`harness/acceptance.json` no longer matches the code.
+Re-stamped; `npm run e2e:check` passed against the recorded run (75 ok, recorded
+2026-07-25). It fails again now, by design: P11 below changed `effects.js`.
 
-```bash
-scripts/e2e.sh            # or --autoclick; needs the GUI
-# then commit the refreshed harness/acceptance.json
-```
+The suggested hardening was also implemented: `scripts/e2e-accept.mjs` now refuses a
+report whose mtime predates any file in the fingerprinted set, so a stale
+`jazzkit-harness-report.txt` can no longer be stamped against today's code. (It still
+can't detect a report that was *copied* to a fresh timestamp — `e2e.sh` deleting stale
+reports before launching remains the primary defence.)
 
-The harness itself was refactored too (T2–T4, T14) — the run also validates that. Expect
-the same 75 assertions to pass; the labels were kept byte-identical on purpose, so any
-change in the report is a real regression, not churn.
-
-Do this **before** the items below, and again after each of them, so a failure has one
-possible cause.
-
-⚠️ **Run `scripts/e2e.sh`, never `node scripts/e2e-accept.mjs` by hand.** A stale
-`jazzkit-harness-report.txt` from an earlier session is still lying in
-`~/Documents/MuseScore4/Scores/`, and `e2e-accept.mjs` will happily stamp *that* old report
-against *today's* fingerprint — producing an acceptance record that claims a passing run
-which never happened. (This was caught and reverted once during the cleanup pass.)
-`e2e.sh` deletes stale reports before launching, which is the whole reason it exists.
-Consider making `e2e-accept.mjs` refuse a report older than the source it fingerprints.
+⚠️ Still true: **run `scripts/e2e.sh`, never `node scripts/e2e-accept.mjs` by hand.**
 
 ---
 
-## P4 step 2 — the shared comp-form component
+## P4 step 2 — the shared comp-form component — **DONE, GUI-verified**
 
-**Where:** [comp_cues.qml](../../JazzKit/comp_cues.qml) and
-[comp_slashes.qml](../../JazzKit/comp_slashes.qml).
+**Implemented as** [JazzKit/CompTargetsForm.qml](../../JazzKit/CompTargetsForm.qml):
+the result label, the picker `ColumnLayout` + `Repeater` + `CheckBox` delegate, the
+button row, and the capture/apply logic, all in one `Item`. Each action file
+([comp_cues.qml](../../JazzKit/comp_cues.qml),
+[comp_slashes.qml](../../JazzKit/comp_slashes.qml)) is now ~45 lines: the `MuseScore{}`
+root the manifest needs, four properties (`settingsTag`, `prompt`, `resultTemplate`,
+`effect`), the `ctx`, and `onCloseRequested: root.quit()`.
 
-**State:** Step 1 (unified target shape) and step 3 (shared logic in `jazzkit.js`) are
-done — see P4's Outcome note. What remains is ~45 lines of **identical UI** in both files:
-the result label, the picker `ColumnLayout` + `Repeater` + `CheckBox` delegate, and the
-Cancel/Apply button row. The two files now differ only in `settingsTag`, the effect they
-call, and two strings.
+**Two decisions that differ from the sketch above:**
 
-**Do:** Extract the dialog body into `JazzKit/lib/CompTargetsForm.qml`, parameterised by
-`settingsTag`, prompt text, result template and the effect function. Each action file
-becomes `MuseScore { id: root; CompTargetsForm { anchors.fill: parent; … } }`.
+- **It lives next to the action files, not in `lib/`.** Same directory ⇒ QML resolves
+  the type implicitly, with **no import statement at all** — one less thing that can
+  fail in the GUI, where each attempt costs a full run. It is still deployed by
+  `sync.sh`, still exempt from `check-qml.mjs`'s root-element rule (PascalCase), and —
+  unlike `lib/*.qml` — it is *covered* by `npm run check`'s `JazzKit/*.qml` glob.
+- **The globals are passed in, not inherited.** The open question (does a nested
+  component see `curScore`/`Element`/`Cursor`?) was not gambled on: the action file
+  builds the `ctx` object and the component reads `ctx.curScore` etc. That object is
+  also the effect layer's `EffectCtx` — the single `effectCtx()` P6 wanted, now owned
+  by one place per action instead of two.
 
-**Watch out for:**
-- The manifest maps each action to a file, so the `MuseScore{}` root must stay in the
-  action file — the component is the *content*, not the root.
-- A component in `lib/` is already deployed by `sync.sh` and exempt from `check-qml.mjs`'s
-  root-element rule (both `lib/**` and PascalCase filenames are exempt since P3).
-- **The open question:** whether the component can see the plugin globals (`curScore`,
-  `Element`, `Cursor`, …). They are context properties of the plugin's QML context, which
-  *should* propagate into a nested component instantiated in that context — but this is
-  unverified, and it is the thing most likely to fail. If it does, pass them in as
-  properties (`property var ctx: ({curScore: curScore, …})` in the action file), which also
-  gives P6 the single `effectCtx()` it wanted.
+- **The component's root is the `ColumnLayout` itself**, anchored to the action's
+  `MuseScore{}` root, rather than an `Item` wrapping it. That keeps the instantiated
+  tree identical to the shipping forms' (`MuseScore` → `ColumnLayout` → controls) —
+  worth it because dialog sizing in this host is fragile and unverifiable outside the
+  GUI (see P8c).
 
-**Verify:** open a score, select a range in one staff, run **To Comp Cues** and **To Comp
-Slashes**; check the instrument list populates, checkboxes toggle, Apply writes and the
-result message appears, and the remembered selection survives a reopen.
-
----
-
-## P8c — replace the comp forms' hand-computed height
-
-**Where:** [comp_cues.qml:32-38](../../JazzKit/comp_cues.qml#L32-L38) and the same block in
-`comp_slashes.qml`: `updateSize()` plus the `chromeHeight: 130` / `rowHeight: 40` magic
-numbers, called from four places.
-
-**Do:** Use the binding the other three forms use —
-`height: contentColumn.implicitHeight + 32` — and delete `updateSize()`, both constants and
-its call sites. Best done **together with P4 step 2**, since the shared component can own
-the sizing once.
-
-**Verify:** the dialog must open tall enough for every checkbox with no scrollbar or
-clipping, at 1 target and at 5+, and must resize sensibly when it switches to the result
-message.
+**Verified (GUI):** both **To Comp Cues** and **To Comp Slashes** open, list the
+instruments, apply to the score, and remember the picks across a reopen. So the
+passed-in `ctx` carries the plugin globals correctly — a nested component does **not**
+need to inherit them.
 
 ---
 
-## P11 — `_tryAddHiddenStaccato` re-scans to hide what it just hid
+## P8c — replace the comp forms' hand-computed height — **DECLINED (tried twice, reverted)**
 
-**Where:** [effects.js](../../JazzKit/lib/effects.js) — `_tryAddHiddenStaccato`.
+Do not attempt this a third time without new information. Both replacements broke the
+dialog in the GUI:
 
-**State:** Untouched. Its four property writes now go through `_trySet`, but the code still
-hedges both ways: it sets `hidden`/`visible = false` on the new articulation *before*
-`cursor.add(s)`, then linearly re-scans `el.articulations` to find the element by symbol
-and set the same two flags again. One of the two halves is dead code, and nothing records
-which.
+1. `contentColumn.forceLayout()` then `contentHeight = implicitHeight + 32` → dialog
+   opened too short, **buttons just below the bottom edge**;
+2. the same measurement kept as `Math.max(measured, explicit)`, with the root's
+   `implicitHeight` **bound** to it → **worse: the buttons did not show at all**.
 
-**Do:** Delete the rescan loop, run `scripts/e2e.sh`, and check the assertion
-"marcato: marcato-only chord gained a hidden staccato" (and "…pre-existing staccato is now
-hidden"). If they still pass, keep it deleted and add a one-line comment: *pre-add flags
-survive `cursor.add`*. If they fail, restore the rescan and delete the **pre-set** instead,
-with a comment saying the flags are dropped on add. Either way the hedge goes and the
-finding is documented.
+The original arithmetic (`180` for the message state, `chromeHeight + rows * rowHeight`
+for the picker) is restored, now in **one** place — `CompTargetsForm.updateSize()` —
+which is all P8c was really worth: the duplication across two files and four call sites
+is gone, the magic numbers stay.
+
+**Why this is fragile, from the MuseScore source** (now written up in api-gotchas,
+"Extension `form` actions"): the window is sized exactly once, at show —
+`WindowView::showView()` ends in
+`updateSize(rootObject->implicitWidth(), rootObject->implicitHeight())` (`windowview.cpp`)
+and nothing resizes it afterwards. `DialogView` adds the title bar separately via
+`frameMargins`, so the shortfall is *not* window chrome being subtracted — a
+`Repeater`-filled `ColumnLayout` genuinely measures smaller than it renders at that
+moment, even after `forceLayout()`. Two corollaries worth keeping:
+
+- **assign `implicitHeight`, don't bind it.** The version that shipped always assigned
+  (`root.implicitHeight = …` from `Component.onCompleted`); the binding attempt is the
+  one that lost the buttons entirely. The action files now assign via `setSize()`, called
+  from `Component.onCompleted` and from `onContentHeightChanged`.
+- the `updateSize()` after Apply cannot resize the window either — it only matters that
+  the picker height (the taller of the two states) is right at open.
 
 ---
 
-## T5 (residual) — confirm the menu layout
+## P11 — `_tryAddHiddenStaccato` re-scans to hide what it just hid — **DONE**
 
-README and CLAUDE.md disagreed about where the actions appear; README now follows
-CLAUDE.md — one multi-action manifest nests them under a **JazzKit** submenu of **Plugins**.
-Nobody has looked at the actual menu.
+The rescan loop is deleted (and the `el` parameter with it): the function sets
+`hidden`/`visible = false` on the new articulation, `cursor.add`s it, and returns.
 
-**Do:** `scripts/sync.sh`, restart, open the Plugins menu, and correct whichever document is
-wrong (README's "## Plugins" intro, CLAUDE.md's "Menus" note, or the api-gotchas
-reference).
+**Verified in the GUI**: `scripts/e2e.sh` re-stamped `harness/acceptance.json` against
+the rescan-free `effects.js` and passed 75/75 — including
+`marcato: marcato-only chord gained a hidden staccato` and
+`marcato: pre-existing staccato is now hidden`. So the **pre-add flags survive
+`cursor.add`** and the rescan was dead code; the finding is recorded in the comment at
+the site.
+
+Note when touching this: any byte of `effects.js` (a comment included) changes the e2e
+fingerprint and invalidates the acceptance record — so a comment-only edit costs a GUI
+re-run. Say it once, in the same commit as the code.
+
+---
+
+## T5 (residual) — confirm the menu layout — **DONE, GUI-verified**
+
+The actions really do nest under a **JazzKit** submenu of **Plugins**, exactly as
+`appmenumodel.cpp` `makePluginsItems()` predicted for a multi-action manifest. README,
+CLAUDE.md and the api-gotchas "Menus" note were already right; no document needed a
+correction. Observed on MuseScore 4.7.3, macOS.
 
 ---
 
@@ -129,9 +131,10 @@ Recorded here so they aren't re-opened without new information.
   MuseScore globals nor the sibling libs, so the only possible shape is
   `merge(globals, libs)`: every caller still enumerates both by hand and nothing shrinks.
   The `tsc` argument doesn't hold either — `tsc` reads `lib/*.js` only, never the `.qml`
-  callers, so tightening the `EffectCtx` typedef catches nothing at a call site. **Revisit
-  only via P4 step 2**, where one component can legitimately own one `effectCtx()` for both
-  comp forms.
+  callers, so tightening the `EffectCtx` typedef catches nothing at a call site.
+  **Partly resolved by P4 step 2**: the two comp actions now each build one `ctx` object
+  that serves as both the component's globals and the effect's `EffectCtx`. The remaining
+  forms keep their own `effectCtx()`, and that is fine.
 - **P13 — split `effects.js` into per-effect files.** P7 removed the duplicated machinery,
   so the file's size is now shared helpers and MuseScore-trap commentary rather than
   repeated code. The cost is unchanged (every form's imports, the fingerprint list, a GUI

@@ -195,7 +195,8 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   `makePluginsItems()`: a manifest with >1 `actions[]` shown on the appmenu emits
   `makeMenu(m.title, …)` — so `"title": "JazzKit"` + 5 actions ⇒ a **"JazzKit"
   submenu**. (`menuPath`/`categoryCode` are irrelevant here — those are the loose
-  -plugin levers.) No API hook injects a custom separator (the menu auto-adds one
+  -plugin levers.) Confirmed in the GUI on 4.7.3: JazzKit's 6 actions appear as a
+  **JazzKit** submenu of **Plugins**. No API hook injects a custom separator (the menu auto-adds one
   after "Manage plugins…"), and plugins can't register a dockable panel
   (Palettes/Properties are C++ appshell docks).
 - **Pin `"apiversion": 1`** (default is 2) to keep the legacy-compatible globals
@@ -213,11 +214,31 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
 - **A `form` gets NO `onRun`.** It's loaded as a view by the ui-engine, so run
   work from `Component.onCompleted` (defer a tick with `Qt.callLater` before
   mutating) and button `onClicked`. `quit()` closes the form.
-- **The host sizes the window to the root's `implicitWidth/Height`, read ONCE at
-  load** (`ExtensionViewer.qml`; falls back to `width/height`, then 480×600). A
-  `Repeater`-driven `ColumnLayout` hasn't laid out when it's measured → the window
-  comes up too short and buttons fall off. Fix: set `implicitHeight` **explicitly**
-  from the known row count (see `comp_*` forms' `updateSize()`).
+- **The host sizes the window ONCE, at show, from the root's implicit size — and
+  never resizes it again.** The chain (verified in source):
+  `ExtensionViewer.qml` binds `height: builder.contentItem.implicitHeight` →
+  `ExtensionViewerDialog` binds `contentHeight: viewer.height` →
+  `StyledDialogView`'s `contentBody.implicitHeight` → and
+  `WindowView::showView()` ends with
+  `updateSize(QSize(rootObject->implicitWidth(), rootObject->implicitHeight()))`
+  (`windowview.cpp`), which is the only call that sizes the QWindow. `DialogView`
+  adds the title bar separately (`frameMargins`), so `contentHeight` is the client
+  area — the title bar is NOT eating your content. Consequences:
+  - a value that is too small at show ⇒ **buttons off the bottom**, permanently;
+  - changing `implicitHeight` later (e.g. when the form switches to its result
+    message) does nothing to the window.
+- **Measuring a `Repeater`-driven `ColumnLayout` does NOT work — use row
+  arithmetic.** A plain `height: contentColumn.implicitHeight + 32` binding is fine
+  for static content (`line_breaks.qml`), but with a `Repeater` the layout hasn't
+  laid out when the host measures, and `forceLayout()` before reading
+  `implicitHeight` **still came up short in the GUI** (buttons below the bottom
+  edge — tried twice on JazzKit's comp forms, reverted both times). Compute it:
+  `chromeHeight(130) + rows * rowHeight(40)`, or a flat 180 for a message-only
+  state. See `CompTargetsForm.qml`'s `updateSize()`.
+- **ASSIGN `implicitHeight`, don't bind it.** `root.implicitHeight = <value>` from
+  the root's `Component.onCompleted` works; `implicitHeight: <expression>` on the
+  `MuseScore{}` root lost the button row entirely in the same form. Verified the
+  hard way, twice.
 - **A form CANNOT dispatch notation `cmd()`s** — same focus trap as the old
   `pluginType:"dialog"`. The host `ExtensionViewer` (a `StyledDialogView`) holds
   focus, so `paste`/`slash-rhythm`/`voice-3`/`slash-fill` log

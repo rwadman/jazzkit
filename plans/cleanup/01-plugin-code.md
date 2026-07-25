@@ -68,7 +68,7 @@ section now describes both.
 
 ---
 
-## P4 — `comp_cues.qml` and `comp_slashes.qml` are ~95% the same file -- PARTLY DONE
+## P4 — `comp_cues.qml` and `comp_slashes.qml` are ~95% the same file -- DONE
 
 **Where:** [comp_cues.qml](../../JazzKit/comp_cues.qml) vs
 [comp_slashes.qml](../../JazzKit/comp_slashes.qml).
@@ -81,9 +81,10 @@ shape (**objects** vs **bare ints**), and two strings.
 **Outcome:** Step 1 done — `compSlashesNotes` now accepts either a bare staff index or
 `{staffIdx, isDrum}` (unit-tested for both), so both forms pass the same rows. The shared
 logic is gone from the forms: `JazzKit.guardScore` / `captureSingleStaffRange` (P5) plus a
-new `JazzKit.selectedTargets(rows)`, the inverse of `computeTargets`. What remains is the
-duplicated **UI block** — moved to [03-remaining.md](03-remaining.md#p4-step-2--the-shared-comp-form-component)
-(needs a GUI run to verify).
+new `JazzKit.selectedTargets(rows)`, the inverse of `computeTargets`. Step 2 followed in
+the second pass: the duplicated **UI block** is now `JazzKit/CompTargetsForm.qml` and each
+action file is ~45 lines (root, four properties, the `ctx`). Verified in the GUI — see
+[03-remaining.md](03-remaining.md#p4-step-2--the-shared-comp-form-component-done-gui-verified).
 
 ---
 
@@ -187,10 +188,12 @@ implicit-height binding.
 
 **Outcome:** (a) and (b) done — the option controls now sit in a single
 `ColumnLayout { visible: root.message === "" }` per form (20+ bindings → 4), and the radio
-buttons are a `Repeater` over a `[{label, value}]` model. (c) — the comp forms' `updateSize()`
-and its `chromeHeight`/`rowHeight` constants — moved to
-[03-remaining.md](03-remaining.md#p8c--replace-the-comp-forms-hand-computed-height): a
-wrongly-sized dialog is exactly the failure that needs a visual check.
+buttons are a `Repeater` over a `[{label, value}]` model. (c) — replacing the comp forms'
+`updateSize()` and its `chromeHeight`/`rowHeight` constants with the implicit-height
+binding — was **tried twice in the second pass and broke the dialog both times**, so it is
+declined and the arithmetic stays (in one place now). The failure modes and the reason are
+in [03-remaining.md](03-remaining.md#p8c--replace-the-comp-forms-hand-computed-height-declined-tried-twice-reverted)
+— read it before trying again.
 
 ---
 
@@ -227,10 +230,12 @@ keeping both.)
 
 ---
 
-## P11 — `_tryAddHiddenStaccato` re-scans to hide what it just hid -- MOVED
+## P11 — `_tryAddHiddenStaccato` re-scans to hide what it just hid -- DONE
 
-Still open — it is a "verify, then simplify" item and the verification is a GUI harness run.
-Full write-up in [03-remaining.md](03-remaining.md#p11--_tryaddhiddenstaccato-re-scans-to-hide-what-it-just-hid).
+Resolved in the second pass: the rescan is deleted, the pre-add `hidden`/`visible` flags
+survive `cursor.add`, and a GUI harness run (75/75, including both marcato assertions)
+proved it. Full write-up in
+[03-remaining.md](03-remaining.md#p11--_tryaddhiddenstaccato-re-scans-to-hide-what-it-just-hid-done).
 
 ---
 
