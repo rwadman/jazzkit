@@ -1,5 +1,7 @@
-// Zero-dep test harness (Node 16 has no built-in `node --test`). Same spirit as
-// scripts/check-qml.mjs: tiny, no packages, exits non-zero on failure.
+// Zero-dep test harness: no packages, no runner config, exits non-zero on failure.
+// Kept in preference to `node --test` for the same reason as scripts/check-qml.mjs —
+// the whole repo stays runnable with nothing but a Node binary, and the output format
+// is ours. See package.json "engines" for the supported Node range.
 import assert from "node:assert/strict";
 
 const tests = [];

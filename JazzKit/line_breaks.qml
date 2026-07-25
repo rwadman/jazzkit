@@ -10,8 +10,9 @@ import "lib/effects.js" as Effects
 
 // Extension "form" action (see manifest.json). Options live in the form body;
 // on Apply we clear existing breaks and attach new ones via direct API
-// (newElement(LAYOUT_BREAK)) — no cmd() — the pattern proven safe from a form
-// (see courtesy_accidentals). Choices are remembered per score as a metatag.
+// (newElement(LAYOUT_BREAK)) — no cmd() — the pattern every JazzKit effect uses,
+// and the only one a form can use at all (see api-gotchas). Choices are
+// remembered per score as a metatag.
 MuseScore {
     id: root
     width: 380
@@ -29,19 +30,22 @@ MuseScore {
     property string message: ""   // non-empty => show result instead of options
 
     // ---- persistence (per-score metatag; shared JazzKit/lib/jazzkit.js) --------
+    // The tag is JSON, so booleans and numbers are stored as themselves. A score
+    // written by an older build used abbreviated string-encoded keys; those simply
+    // don't match and the defaults above apply (cosmetic per-score setting).
     function loadSettings() {
         var s = JazzKit.loadJsonTag(curScore, settingsTag);
         if (!s) return;
-        if (s.d !== undefined) optDouble = s.d;
-        if (s.r !== undefined) optRepeats = s.r;
-        if (s.e !== undefined) valEveryN = parseInt(s.e, 10) || 0;
-        if (s.mn !== undefined) valMinBars = parseInt(s.mn, 10) || 1;
-        if (s.mx !== undefined) valMaxBars = parseInt(s.mx, 10) || 0;
+        if (s.atDouble !== undefined) optDouble = !!s.atDouble;
+        if (s.atRepeats !== undefined) optRepeats = !!s.atRepeats;
+        if (s.everyN >= 0) valEveryN = s.everyN;
+        if (s.minBars >= 1) valMinBars = s.minBars;
+        if (s.maxBars >= 0) valMaxBars = s.maxBars;
     }
     function saveSettings() {
         JazzKit.saveJsonTag(curScore, settingsTag, {
-            d: optDouble, r: optRepeats,
-            e: String(valEveryN), mn: String(valMinBars), mx: String(valMaxBars)
+            atDouble: optDouble, atRepeats: optRepeats,
+            everyN: valEveryN, minBars: valMinBars, maxBars: valMaxBars
         });
     }
 
@@ -128,10 +132,8 @@ MuseScore {
     }
 
     function apply() {
-        if (!curScore) { root.message = qsTr("Open a score first."); return; }
-        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion)) {
-            root.message = qsTr("This plugin is for MuseScore 4.4 or later"); return;
-        }
+        var guard = JazzKit.guardScore(curScore, mscoreMajorVersion, mscoreMinorVersion);
+        if (guard !== "") { root.message = guard; return; }
         var measures = collectMeasures();
         if (measures.length === 0) { root.message = qsTr("No measures found to format."); return; }
 
@@ -167,60 +169,61 @@ MuseScore {
             wrapMode: Text.WordWrap
         }
 
-        // --- options view ---
-        CheckBox {
+        // --- options view (one visibility binding for the whole set) ---
+        ColumnLayout {
+            Layout.fillWidth: true
             visible: root.message === ""
-            text: qsTr("Line break at double barlines")
-            checked: root.optDouble
-            onClicked: root.optDouble = !root.optDouble
-        }
-        CheckBox {
-            visible: root.message === ""
-            text: qsTr("Line break at repeats")
-            checked: root.optRepeats
-            onClicked: root.optRepeats = !root.optRepeats
-        }
+            spacing: 12
 
-        RowLayout {
-            visible: root.message === ""
-            spacing: 8
-            StyledTextLabel { text: qsTr("Line break every") }
-            IncrementalPropertyControl {
-                implicitWidth: 56
-                currentValue: root.valEveryN
-                minValue: 0
-                maxValue: 99
-                step: 1
-                onValueEdited: function(newValue) { root.valEveryN = newValue }
+            CheckBox {
+                text: qsTr("Line break at double barlines")
+                checked: root.optDouble
+                onClicked: root.optDouble = !root.optDouble
             }
-            StyledTextLabel { Layout.fillWidth: true; text: qsTr("bars (0 = skip)") }
-        }
-        RowLayout {
-            visible: root.message === ""
-            spacing: 8
-            StyledTextLabel { text: qsTr("Minimum bars on a line") }
-            IncrementalPropertyControl {
-                implicitWidth: 56
-                currentValue: root.valMinBars
-                minValue: 1
-                maxValue: 99
-                step: 1
-                onValueEdited: function(newValue) { root.valMinBars = newValue }
+            CheckBox {
+                text: qsTr("Line break at repeats")
+                checked: root.optRepeats
+                onClicked: root.optRepeats = !root.optRepeats
             }
-        }
-        RowLayout {
-            visible: root.message === ""
-            spacing: 8
-            StyledTextLabel { text: qsTr("Maximum bars on a line") }
-            IncrementalPropertyControl {
-                implicitWidth: 56
-                currentValue: root.valMaxBars
-                minValue: 0
-                maxValue: 99
-                step: 1
-                onValueEdited: function(newValue) { root.valMaxBars = newValue }
+
+            RowLayout {
+                spacing: 8
+                StyledTextLabel { text: qsTr("Line break every") }
+                IncrementalPropertyControl {
+                    implicitWidth: 56
+                    currentValue: root.valEveryN
+                    minValue: 0
+                    maxValue: 99
+                    step: 1
+                    onValueEdited: function(newValue) { root.valEveryN = newValue }
+                }
+                StyledTextLabel { Layout.fillWidth: true; text: qsTr("bars (0 = skip)") }
             }
-            StyledTextLabel { Layout.fillWidth: true; text: qsTr("(0 = no limit)") }
+            RowLayout {
+                spacing: 8
+                StyledTextLabel { text: qsTr("Minimum bars on a line") }
+                IncrementalPropertyControl {
+                    implicitWidth: 56
+                    currentValue: root.valMinBars
+                    minValue: 1
+                    maxValue: 99
+                    step: 1
+                    onValueEdited: function(newValue) { root.valMinBars = newValue }
+                }
+            }
+            RowLayout {
+                spacing: 8
+                StyledTextLabel { text: qsTr("Maximum bars on a line") }
+                IncrementalPropertyControl {
+                    implicitWidth: 56
+                    currentValue: root.valMaxBars
+                    minValue: 0
+                    maxValue: 99
+                    step: 1
+                    onValueEdited: function(newValue) { root.valMaxBars = newValue }
+                }
+                StyledTextLabel { Layout.fillWidth: true; text: qsTr("(0 = no limit)") }
+            }
         }
 
         Item { Layout.fillHeight: true }

@@ -3,53 +3,55 @@ import { loadQmlLib } from "./load-qml-lib.mjs";
 
 const Artic = loadQmlLib("../JazzKit/lib/articulations.js", "articulationsLib");
 
+// classifyChord's whole return shape — no field is reported that no caller reads.
+test("classifyChord reports exactly hasMarcato / staccatoIndices / addAbove", () => {
+    eq(Object.keys(Artic.classifyChord(["articMarcatoAbove"])).sort(),
+        ["addAbove", "hasMarcato", "staccatoIndices"]);
+});
+
 test("plain chord: no marcato, nothing to do", () => {
     const c = Artic.classifyChord(["articAccentAbove"]);
     eq(c.hasMarcato, false);
-    eq(c.needsStaccato, false);
     eq(c.staccatoIndices, []);
 });
 
 test("marcato above, no staccato → add one, above", () => {
     const c = Artic.classifyChord(["articMarcatoAbove"]);
     eq(c.hasMarcato, true);
-    eq(c.needsStaccato, true);
     eq(c.addAbove, true);
-    eq(c.staccatoIndices, []);
+    eq(c.staccatoIndices, []);   // none present → effects.js adds a hidden one
 });
 
 test("marcato below, no staccato → add one, below", () => {
     const c = Artic.classifyChord(["articMarcatoBelow"]);
-    eq(c.marcatoBelow, true);
-    eq(c.needsStaccato, true);
+    eq(c.hasMarcato, true);
+    eq(c.staccatoIndices, []);
     eq(c.addAbove, false);
 });
 
 test("marcato + existing staccato → hide it, don't add", () => {
     const c = Artic.classifyChord(["articMarcatoAbove", "articStaccatoAbove"]);
     eq(c.hasMarcato, true);
-    eq(c.needsStaccato, false);
     eq(c.staccatoIndices, [1]);
 });
 
 test("staccato but no marcato → leave untouched", () => {
     const c = Artic.classifyChord(["articStaccatoAbove"]);
     eq(c.hasMarcato, false);
-    eq(c.needsStaccato, false);
-    // staccatoIndices is reported, but with no marcato the .qml ignores it.
+    // staccatoIndices is reported, but with no marcato effects.js ignores it.
     eq(c.staccatoIndices, [0]);
 });
 
 test("both marcato placements → treated as above", () => {
     const c = Artic.classifyChord(["articMarcatoAbove", "articMarcatoBelow"]);
+    eq(c.hasMarcato, true);
     eq(c.addAbove, true);
-    eq(c.needsStaccato, true);
 });
 
 test("all staccato spelling variants are recognised", () => {
     for (const name of Artic.STACCATO_NAMES) {
         const c = Artic.classifyChord(["articMarcatoAbove", name]);
-        eq(c.needsStaccato, false, `${name} should count as a staccato`);
+        eq(c.staccatoIndices, [1], `${name} should count as a staccato`);
     }
 });
 
@@ -96,7 +98,6 @@ test("chordNames output feeds classifyChord end-to-end", () => {
     // A chord with marcato-above and an existing staccato → hide it, don't add.
     const c = Artic.classifyChord(Artic.chordNames(SymId, [{ symbol: 1 }, { symbol: 3 }]));
     eq(c.hasMarcato, true);
-    eq(c.needsStaccato, false);
     eq(c.staccatoIndices, [1]);
 });
 

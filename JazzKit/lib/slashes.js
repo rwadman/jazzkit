@@ -1,12 +1,9 @@
 // @ts-check
 // Pure rhythm helpers for Fill Empty Beats with Slashes.
 //
-// No MuseScore API here. The .qml walks the score and reads out, per measure,
-// its time signature and voice-1 rest segments as plain data; this file does the
-// beat math and whole-beat alignment. The .qml then runs slash-fill on each
-// returned region.
-//
-//   QML:  import "lib/slashes.js" as Slashes
+// No MuseScore API here: effects.js:_emptyRestRegions reads each measure's time
+// signature and voice-1 rest segments out as plain data, this file does the beat
+// math and whole-beat alignment, and effects.js slash-fills the returned regions.
 
 /**
  * One rest segment in voice 1: its start tick and duration in ticks.
@@ -112,5 +109,5 @@ var slashesLib = {
     emptyRestRegions: emptyRestRegions
 };
 
-// require()-able from an extension macro; no-op under QML import / Node loader.
+// Export trailer — MANDATORY, see api-gotchas "macros actions".
 if (typeof exports !== "undefined") { exports = slashesLib; }

@@ -65,3 +65,6 @@ var harnessLib = {
     skip: skip,
     format: format
 };
+
+// require()-able from an extension macro; no-op under QML import / Node loader.
+if (typeof exports !== "undefined") { exports = harnessLib; }

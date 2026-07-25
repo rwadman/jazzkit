@@ -12,6 +12,9 @@ import "lib/effects.js" as Effects
 // via the cursor + direct API (Effects.compCuesNotes) — no notation cmd()s — so
 // it runs from the form (which a clipboard copy/paste could NOT, see api-gotchas)
 // and carries only notes + articulations + fermatas, not slurs/dynamics/text.
+//
+// Shares its shape with comp_slashes.qml; the common logic (version/score guard,
+// selection capture, row build + collect) lives in lib/jazzkit.js.
 MuseScore {
     id: root
     implicitWidth: 360
@@ -37,11 +40,6 @@ MuseScore {
 
     ListModel { id: targetsModel }
 
-    function loadEnabledIds() {
-        var s = JazzKit.loadJsonTag(curScore, settingsTag);
-        return (s && s.ids !== undefined) ? s.ids : null;
-    }
-
     function effectCtx() {
         return {
             curScore: curScore, newElement: newElement,
@@ -52,29 +50,20 @@ MuseScore {
 
     // Validate + capture the selection, then build the instrument list.
     function capture() {
-        if (!curScore) { root.message = qsTr("Open a score first."); return; }
-        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion)) {
-            root.message = qsTr("This plugin is for MuseScore 4.4 or later"); return;
-        }
-        var sel = curScore.selection;
-        if (!sel || !sel.isRange || sel.elements.length === 0) {
-            root.message = qsTr("Please select a range of notes first."); return;
-        }
-        if (sel.endStaff - sel.startStaff !== 1) {
-            root.message = qsTr("Please select notes in a single staff only."); return;
-        }
-        srcStaffIdx = sel.startStaff;
+        var guard = JazzKit.guardScore(curScore, mscoreMajorVersion, mscoreMinorVersion);
+        if (guard !== "") { root.message = guard; return; }
 
-        var cursor = curScore.newCursor();
-        cursor.rewind(Cursor.SELECTION_START);
-        selStart = cursor.tick;
-        measureTick = cursor.measure.firstSegment.tick;
-        cursor.rewind(Cursor.SELECTION_END);
-        selEnd = cursor.tick;
-        if (selEnd === 0) selEnd = curScore.lastSegment.tick + 1;
+        var sel = JazzKit.captureSingleStaffRange(curScore, Cursor);
+        if (!sel.ok) { root.message = sel.error; return; }
+        selStart = sel.selStart;
+        selEnd = sel.selEnd;
+        measureTick = sel.measureTick;
+        srcStaffIdx = sel.staffIdx;
 
+        var saved = JazzKit.loadJsonTag(curScore, settingsTag);
+        var rows = JazzKit.computeTargets(curScore.parts, srcStaffIdx,
+                                          (saved && saved.ids !== undefined) ? saved.ids : null);
         targetsModel.clear();
-        var rows = JazzKit.computeTargets(curScore.parts, srcStaffIdx, loadEnabledIds());
         for (var i = 0; i < rows.length; ++i) targetsModel.append(rows[i]);
         if (targetsModel.count === 0)
             root.message = qsTr("No comping instruments (piano, bass, drums, …) other than the selected staff were found.");
@@ -83,20 +72,19 @@ MuseScore {
     Component.onCompleted: { capture(); updateSize(); }
 
     function apply() {
-        var ids = [];
-        var targets = [];
-        for (var i = 0; i < targetsModel.count; ++i) {
-            var r = targetsModel.get(i);
-            if (r.checked) { ids.push(r.instrumentId); targets.push({ staffIdx: r.staffIdx, isDrum: r.isDrum }); }
+        var rows = [];
+        for (var i = 0; i < targetsModel.count; ++i) rows.push(targetsModel.get(i));
+        var picked = JazzKit.selectedTargets(rows);
+        if (picked.targets.length === 0) {
+            root.message = qsTr("Check at least one instrument."); updateSize(); return;
         }
-        if (targets.length === 0) { root.message = qsTr("Check at least one instrument."); updateSize(); return; }
-        JazzKit.saveJsonTag(curScore, settingsTag, { ids: ids });
+        JazzKit.saveJsonTag(curScore, settingsTag, { ids: picked.ids });
 
         var res = Effects.compCuesNotes(effectCtx(), {
             selStart: selStart, selEnd: selEnd, measureTick: measureTick,
-            srcStaffIdx: srcStaffIdx, targets: targets
+            srcStaffIdx: srcStaffIdx, targets: picked.targets
         });
-        root.message = res.error ? qsTr(res.error)
+        root.message = res.error ? res.error
                                  : qsTr("Added a cue to %1 instrument(s).").arg(res.targetsDone);
         updateSize();
     }
@@ -107,6 +95,7 @@ MuseScore {
         anchors.margins: 16
         spacing: 12
 
+        // --- result view ---
         StyledTextLabel {
             Layout.fillWidth: true
             visible: root.message !== ""
@@ -114,22 +103,27 @@ MuseScore {
             wrapMode: Text.WordWrap
         }
 
-        StyledTextLabel {
+        // --- picker view ---
+        ColumnLayout {
             Layout.fillWidth: true
             visible: root.message === ""
-            text: qsTr("Add a cue to:")
-        }
+            spacing: 12
 
-        Repeater {
-            model: targetsModel
-            delegate: CheckBox {
-                required property var model
-                required property int index
-                visible: root.message === ""
+            StyledTextLabel {
                 Layout.fillWidth: true
-                text: model.label
-                checked: model.checked
-                onClicked: targetsModel.setProperty(index, "checked", !model.checked)
+                text: qsTr("Add a cue to:")
+            }
+
+            Repeater {
+                model: targetsModel
+                delegate: CheckBox {
+                    required property var model
+                    required property int index
+                    Layout.fillWidth: true
+                    text: model.label
+                    checked: model.checked
+                    onClicked: targetsModel.setProperty(index, "checked", !model.checked)
+                }
             }
         }
 

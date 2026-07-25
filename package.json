@@ -5,8 +5,12 @@
   "scripts": {
     "test": "node test/run.mjs",
     "typecheck": "tsc -p tsconfig.json",
-    "check": "node scripts/check-qml.mjs JazzKit/*.qml JazzKit/lib/*.qml",
-    "e2e:check": "node scripts/check-acceptance.mjs"
+    "check": "node scripts/check-qml.mjs JazzKit/*.qml harness/*.qml",
+    "e2e:check": "node scripts/check-acceptance.mjs",
+    "verify": "npm test && npm run typecheck && npm run check && npm run e2e:check"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "devDependencies": {
     "typescript": "^5.6.0"

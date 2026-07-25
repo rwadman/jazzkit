@@ -28,6 +28,14 @@ fi
 rm -rf "$DEST"
 mkdir -p "$(dirname "$DEST")"
 cp -r "$SRC/" "$DEST"
+# Dev-only files that live in the source bundle but have no business in a user
+# install: the TypeScript declarations are for `npm run typecheck` alone.
+rm -f "$DEST"/lib/*.d.ts
 echo "Synced to $DEST"
 echo "Restart MuseScore, then enable JazzKit once in Home > Plugins."
-echo "NOTE: the old legacy copy (if any) still sits in Documents/MuseScore4/Plugins/JazzKit — delete it to avoid duplicate menu entries."
+
+# JazzKit used to ship as loose legacy plugins. Only nag if such a copy is still there.
+LEGACY="$HOME/Documents/MuseScore4/Plugins/JazzKit"
+if [ -e "$LEGACY" ]; then
+  echo "NOTE: a legacy copy still sits in $LEGACY — delete it to avoid duplicate menu entries."
+fi

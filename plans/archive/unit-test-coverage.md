@@ -1,5 +1,13 @@
 # Plan B — Maximise `npm test` coverage (planner/executor split)
 
+> **ARCHIVED — IMPLEMENTED, and partly SUPERSEDED.** The pure-planner split landed
+> (`JazzKit/lib/*.js` + `test/`), but the *executor* design below — operation
+> descriptors (`[{op:"select"}, {op:"cmd"}, …]`) driven through `ctx.cmd` /
+> `ctx.JazzKit.selectStaffRange` — was abandoned: extension **forms cannot dispatch
+> notation `cmd()`s**, so `JazzKit/lib/effects.js` is a direct-API effect layer with no
+> descriptors and no selection step. Do not use this document as a guide to the current
+> architecture; see CLAUDE.md and `effects.js`.
+
 ## Goal
 Move as much plugin logic as possible under **headless Node unit tests** (`npm test`),
 so that CI catches regressions without MuseScore. The API-touching parts (`cmd()`,

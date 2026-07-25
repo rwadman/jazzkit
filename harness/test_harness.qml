@@ -11,7 +11,7 @@ import "lib/accidentals.js" as Accidentals
 import "lib/linebreaks.js" as LineBreaks
 import "lib/effects.js" as Effects
 import "lib/harness.js" as H
-import "lib"
+import "."          // InfoDialog.qml — dev-only, lives beside this file
 
 // SEMI-AUTOMATED TEST HARNESS — a DEV tool, deployed as its own MuseScore package
 // (JazzKitTest, via scripts/sync-harness.sh) so it never ships in the JazzKit
@@ -116,12 +116,29 @@ MuseScore {
         return null;
     }
 
+    // The ChordRest segment at EXACTLY `tick`, or null. The one "find the segment at
+    // this tick" walk — shared by chordAtVoice, dumpTick and fermataCount. Deliberately
+    // a segment walk, not cursor.rewindToTick: that skips FORWARD past segments with no
+    // element in the current track (api-gotchas), which would silently report a later
+    // segment as if it were the one asked for.
+    function segmentAt(tick) {
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            for (var s = m.firstSegment; s; s = s.nextInMeasure)
+                if (s.segmentType === Segment.ChordRest && s.tick === tick) return s;
+        return null;
+    }
+
+    // The CHORD element at (staffIdx, voice, tick), or null.
+    function chordAtVoice(staffIdx, voice, tick) {
+        var seg = segmentAt(tick);
+        if (!seg) return null;
+        var el = seg.elementAt(staffIdx * 4 + voice);
+        return (el && el.type === Element.CHORD) ? el : null;
+    }
+
     // The CHORD element at (staffIdx, voice 0, tick), or null.
     function chordAt(staffIdx, tick) {
-        var c = curScore.newCursor();
-        c.staffIdx = staffIdx; c.voice = 0;
-        c.rewindToTick(tick);
-        return (c.element && c.element.type === Element.CHORD) ? c.element : null;
+        return chordAtVoice(staffIdx, 0, tick);
     }
 
     // First measure whose voice-1 of staffIdx is entirely rests, as {selStart,selEnd,staffIdx}, or null.
@@ -152,6 +169,11 @@ MuseScore {
         if (el.type === Element.REST) return "R";
         return "?" + el.type;
     }
+    // NOTE: dumpVoice's `to` is INCLUSIVE and dumpVoiceN's is EXCLUSIVE, and every
+    // caller passes the next measure's start tick as `to` — so dumpVoice deliberately
+    // shows one segment past the range (the downbeat after it) while dumpVoiceN stops
+    // short of it. Collapsing one onto the other would change what several diagnostics
+    // print, so they stay two functions.
     function dumpVoice(staffIdx, from, to) {
         var c = curScore.newCursor();
         c.staffIdx = staffIdx; c.voice = 0; c.rewind(Cursor.SCORE_START);
@@ -163,11 +185,19 @@ MuseScore {
         }
         return out.length ? out.join(" ") : "(empty)";
     }
+    // Compact dump of ONE voice of a staff across [from, to).
+    function dumpVoiceN(staffIdx, voice, from, to) {
+        var out = [];
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            for (var s = m.firstSegment; s; s = s.nextInMeasure) {
+                if (s.segmentType !== Segment.ChordRest || s.tick < from || s.tick >= to) continue;
+                var el = s.elementAt(staffIdx * 4 + voice);
+                if (el) out.push(s.tick + ":" + elemTag(el) + "/" + (el.duration ? el.duration.ticks : "?"));
+            }
+        return out.length ? out.join(" ") : "(empty)";
+    }
     function dumpTick(staffIdx, tick) {
-        var seg = null;
-        for (var m = curScore.firstMeasure; m && !seg; m = m.nextMeasure)
-            for (var s = m.firstSegment; s; s = s.nextInMeasure)
-                if (s.segmentType === Segment.ChordRest && s.tick === tick) { seg = s; break; }
+        var seg = segmentAt(tick);
         if (!seg) return "(no segment at " + tick + ")";
         var out = [];
         for (var v = 0; v < 4; ++v) out.push("v" + v + "=" + elemTag(seg.elementAt(staffIdx * 4 + v)));
@@ -228,17 +258,14 @@ MuseScore {
 
     // Number of FERMATA annotations on the segment at `tick` belonging to `track`.
     function fermataCount(track, tick) {
-        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
-            for (var s = m.firstSegment; s; s = s.nextInMeasure) {
-                if (s.segmentType !== Segment.ChordRest || s.tick !== tick) continue;
-                var ann = s.annotations || [];
-                var n = 0;
-                for (var i = 0; i < ann.length; ++i)
-                    if (ann[i] && ann[i].type === Element.FERMATA
-                        && (ann[i].track === undefined || ann[i].track === track)) ++n;
-                return n;
-            }
-        return 0;
+        var seg = segmentAt(tick);
+        if (!seg) return 0;
+        var ann = seg.annotations || [];
+        var n = 0;
+        for (var i = 0; i < ann.length; ++i)
+            if (ann[i] && ann[i].type === Element.FERMATA
+                && (ann[i].track === undefined || ann[i].track === track)) ++n;
+        return n;
     }
 
     // ---- fixture lifecycle (mutating) ---------------------------------------
@@ -340,6 +367,31 @@ MuseScore {
         var m = curScore.firstMeasure;
         var end = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
         return { measureTick: m.firstSegment.tick, selStart: m.firstSegment.tick, selEnd: end };
+    }
+
+    // Shared prelude of every drum-cue case: reuse the score's drum staff, append a
+    // pitched source staff and make sure `bars` measures exist. Returns {drum, src},
+    // or null — in which case the skip/failure has ALREADY been recorded under the
+    // caller's own labels (they differ per case and are named regressions).
+    function drumCueFixture(r, skipLabel, srcLabel, bars) {
+        var drum = findDrumStaff();
+        if (drum < 0) { H.skip(r, skipLabel, "no drum staff. " + partsDiag()); return null; }
+        var src = appendPitched();
+        if (src < 0) { H.check(r, srcLabel, false, "append failed"); return null; }
+        ensureMeasures(bars);
+        return { drum: drum, src: src };
+    }
+
+    // Drive Effects.compCuesNotes into one drum target and assert the call itself
+    // succeeded; the caller asserts what landed. `p` is {drum, src, selStart, selEnd,
+    // measureTick}. Returns the effect's result.
+    function runDrumCue(r, label, p) {
+        var res = Effects.compCuesNotes(effectCtx(), {
+            selStart: p.selStart, selEnd: p.selEnd, measureTick: p.measureTick, srcStaffIdx: p.src,
+            targets: [{ staffIdx: p.drum, isDrum: true }]
+        });
+        H.check(r, label + ": no error", res.error === "", res.error || "ok");
+        return res;
     }
 
     // Note: no part-teardown. removeParts while the just-added instruments' samplers
@@ -624,11 +676,10 @@ MuseScore {
     // part, mid-bar". A drumset drops invalid pitches silently, so compSlashesNotes
     // must pick a VALID drum pitch. Uses the up-front drum staff + a mid-bar range.
     function caseCompSlashesNotesDrum(r) {
-        var drum = findDrumStaff();
-        if (drum < 0) { H.skip(r, "compSlashesNotes drum: writes slashes mid-bar", "no drum staff. " + partsDiag()); return; }
-        var src = appendPitched();
-        if (src < 0) { H.check(r, "compSlashesNotes drum: source staff", false, "append failed"); return; }
-        ensureMeasures(1);
+        var fx = drumCueFixture(r, "compSlashesNotes drum: writes slashes mid-bar",
+                                "compSlashesNotes drum: source staff", 1);
+        if (!fx) return;
+        var drum = fx.drum, src = fx.src;
         writeQuarters(src, [60, 62, 64, 65]);
         var m = curScore.firstMeasure;
         var barStart = m.firstSegment.tick;
@@ -692,45 +743,32 @@ MuseScore {
                 "fermatas=" + fermataCount(tgt * 4, selStart));
     }
 
-    // The chord at (staffIdx, voice, tick), or null.
-    function chordAtVoice(staffIdx, voice, tick) {
-        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
-            for (var s = m.firstSegment; s; s = s.nextInMeasure)
-                if (s.segmentType === Segment.ChordRest && s.tick === tick) {
-                    var el = s.elementAt(staffIdx * 4 + voice);
-                    return (el && el.type === Element.CHORD) ? el : null;
-                }
-        return null;
-    }
-
     // To Comp Cues into a DRUM staff — Effects.compCuesNotes writes the source rhythm
     // as closed-hi-hat CUE NOTES (cue-size, silent, stem up, slash notehead above
     // the staff) in the hi-hat's drumset voice. Whole-bar source.
     function caseCompCuesNotesDrum(r) {
-        var drum = findDrumStaff();
-        if (drum < 0) { H.skip(r, "compCuesNotes drum: cue notes above staff", "no drum staff. " + partsDiag()); return; }
-        var src = appendPitched();
-        if (src < 0) { H.check(r, "compCuesNotes drum: source staff", false, "append failed"); return; }
-        ensureMeasures(1);
+        var fx = drumCueFixture(r, "compCuesNotes drum: cue notes above staff",
+                                "compCuesNotes drum: source staff", 1);
+        if (!fx) return;
+        var drum = fx.drum, src = fx.src;
         writeQuarters(src, [60, 62, 64, 65]);
         var m = curScore.firstMeasure;
         var barStart = m.firstSegment.tick;
         var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
         markSource(src, barStart, SymId.articStaccatoAbove, SymId.fermataAbove);
 
-        var res = Effects.compCuesNotes(effectCtx(), {
-            selStart: barStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src,
-            targets: [{ staffIdx: drum, isDrum: true }]
-        });
-        H.check(r, "compCuesNotes drum: no error", res.error === "", res.error || "ok");
+        runDrumCue(r, "compCuesNotes drum",
+                   { drum: drum, src: src, selStart: barStart, selEnd: selEnd, measureTick: barStart });
         // The cue goes specifically in UI voice 3 (0-indexed 2) via cursor.add.
-        // Whole-bar (cue starts at the measure boundary) is the regression: pass 2
-        // must replace the rest shell right-to-left, else beat 2 is dropped.
+        // Whole-bar (cue starts at the measure boundary) is the regression: pass 1
+        // lays a rest shell that TILES the whole measure, so each note beat already
+        // has an exactly-sized rest for pass 2's single forward walk to swap in place
+        // — all 4 beats survive; a shell that only covered part of the bar dropped one.
         var voice = 2;
         var n = chordCount(barStart, selEnd, drum * 4 + voice);
         H.check(r, "compCuesNotes drum: 4 cue notes in UI voice 3 (0-idx 2)", n === 4,
                 "chords@v2=" + n + " | v2: " + dumpVoiceN(drum, 2, barStart, selEnd));
-        var ch = voice >= 0 ? chordAtVoice(drum, voice, barStart) : null;
+        var ch = chordAtVoice(drum, voice, barStart);
         H.check(r, "compCuesNotes drum: cue-size", ch && ch.small === true, ch ? "small=" + ch.small : "no chord");
         H.check(r, "compCuesNotes drum: no per-note small-notehead flag", ch && ch.notes[0].small !== true,
                 ch ? "note.small=" + ch.notes[0].small : "no chord");
@@ -757,38 +795,21 @@ MuseScore {
                 fermataCount(drum * 4 + voice, barStart) === 1, "fermatas=" + fermataCount(drum * 4 + voice, barStart));
     }
 
-    // Compact dump of ONE voice of a staff across [from, to].
-    function dumpVoiceN(staffIdx, voice, from, to) {
-        var out = [];
-        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
-            for (var s = m.firstSegment; s; s = s.nextInMeasure) {
-                if (s.segmentType !== Segment.ChordRest || s.tick < from || s.tick >= to) continue;
-                var el = s.elementAt(staffIdx * 4 + voice);
-                if (el) out.push(s.tick + ":" + elemTag(el) + "/" + (el.duration ? el.duration.ticks : "?"));
-            }
-        return out.length ? out.join(" ") : "(empty)";
-    }
-
     // Drum comp cue with a MID-BAR selection in a LATER bar (bar 2, beat 2) — the
     // case the first-bar/bar-start tests never covered. Asserts the cue lands
     // exactly at selStart (not shifted) and stems point up.
     function caseCompCuesNotesDrumMidBar(r) {
-        var drum = findDrumStaff();
-        if (drum < 0) { H.skip(r, "drum cue mid-bar", "no drum staff. " + partsDiag()); return; }
-        var src = appendPitched();
-        if (src < 0) { H.check(r, "drum cue mid-bar: source staff", false, "append failed"); return; }
-        ensureMeasures(3);
+        var fx = drumCueFixture(r, "drum cue mid-bar", "drum cue mid-bar: source staff", 3);
+        if (!fx) return;
+        var drum = fx.drum, src = fx.src;
         writeQuarters(src, [60, 62, 64, 65, 67, 69, 71, 72]); // bars 1-2
         var m2 = curScore.firstMeasure.nextMeasure;
         var bar2 = m2.firstSegment.tick;
         var selStart = bar2 + 480;   // bar 2, beat 2 — mid-bar, not the first bar
         var selEnd = m2.nextMeasure ? m2.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
 
-        var res = Effects.compCuesNotes(effectCtx(), {
-            selStart: selStart, selEnd: selEnd, measureTick: bar2, srcStaffIdx: src,
-            targets: [{ staffIdx: drum, isDrum: true }]
-        });
-        H.check(r, "drum cue mid-bar: no error", res.error === "", res.error || "ok");
+        runDrumCue(r, "drum cue mid-bar",
+                   { drum: drum, src: src, selStart: selStart, selEnd: selEnd, measureTick: bar2 });
         var voice = 2;   // UI voice 3 (0-indexed)
         var n = chordCount(selStart, selEnd, drum * 4 + voice);
         // Beats 2-4 selected → 3 cue notes, starting exactly at selStart.
@@ -796,7 +817,7 @@ MuseScore {
                 "chords@v2=" + n + " | bar2 cue voice: " + dumpVoiceN(drum, voice, bar2, selEnd));
         H.check(r, "drum cue mid-bar: NONE before selStart", chordCount(bar2, selStart, drum * 4 + voice) === 0,
                 "before selStart=" + chordCount(bar2, selStart, drum * 4 + voice));
-        var ch = voice >= 0 ? chordAtVoice(drum, voice, selStart) : null;
+        var ch = chordAtVoice(drum, voice, selStart);
         H.check(r, "drum cue mid-bar: pitch present at selStart", ch !== null, ch ? "chord present" : "MISSING at selStart");
         // Regression: cue must sit at a ledger-free line (fixedLine >= -1), else a
         // ledger line strikes through the slash notehead.
@@ -807,17 +828,16 @@ MuseScore {
     }
 
     // Drum comp cue for TWO EIGHTHS at the START of a later bar — regression for
-    // "only the first cue note shows up, together with an 8th rest." Pass 2 replaces
-    // the rest shell RIGHT-TO-LEFT (re-rewinding each time), because fixing a fresh
-    // chord's V_INVALID duration reflows voice V and invalidates a forward-walking
-    // cursor; a single left-to-right walk dropped the second eighth. Bar 3 (bars 1-2
-    // are already loaded with other cases).
+    // "only the first cue note shows up, together with an 8th rest." UI voice 3 is not
+    // auto-filled, so a rest shell covering only the selection left a GAP to the bar
+    // end; fixing the first cue chord's invalid duration reflowed into that gap and
+    // swallowed the second eighth. Pass 1 now TILES the whole measure with rests, so
+    // every pass-2 swap is an exact in-place replacement and both eighths survive.
+    // Bar 3 (bars 1-2 are already loaded with other cases).
     function caseCompCuesNotesDrumEighths(r) {
-        var drum = findDrumStaff();
-        if (drum < 0) { H.skip(r, "drum cue eighths", "no drum staff. " + partsDiag()); return; }
-        var src = appendPitched();
-        if (src < 0) { H.check(r, "drum cue eighths: source staff", false, "append failed"); return; }
-        ensureMeasures(3);
+        var fx = drumCueFixture(r, "drum cue eighths", "drum cue eighths: source staff", 3);
+        if (!fx) return;
+        var drum = fx.drum, src = fx.src;
         // Two eighths at the start of bar 3 in the source; rest of the bar stays rests.
         var m3 = curScore.firstMeasure.nextMeasure.nextMeasure;
         var bar3 = m3.firstSegment.tick;
@@ -830,11 +850,8 @@ MuseScore {
         var selStart = bar3;
         var selEnd = bar3 + 480;   // just the two eighths
 
-        var res = Effects.compCuesNotes(effectCtx(), {
-            selStart: selStart, selEnd: selEnd, measureTick: bar3, srcStaffIdx: src,
-            targets: [{ staffIdx: drum, isDrum: true }]
-        });
-        H.check(r, "drum cue eighths: no error", res.error === "", res.error || "ok");
+        runDrumCue(r, "drum cue eighths",
+                   { drum: drum, src: src, selStart: selStart, selEnd: selEnd, measureTick: bar3 });
         var voice = 2;   // UI voice 3 (0-indexed)
         var n = chordCount(selStart, selEnd, drum * 4 + voice);
         // The bug: only 1 cue note (the first eighth) + an 8th rest. Correct: BOTH.
@@ -856,11 +873,9 @@ MuseScore {
     // still tile the WHOLE measure (trailing fill), else the reflow corrupted the
     // middle quarter into a gap+eighth ("a 4th, empty 8th, an 8th, a 4th"). Bar 4.
     function caseCompCuesNotesDrumQuartersPartial(r) {
-        var drum = findDrumStaff();
-        if (drum < 0) { H.skip(r, "drum cue quarters-partial", "no drum staff. " + partsDiag()); return; }
-        var src = appendPitched();
-        if (src < 0) { H.check(r, "drum cue quarters-partial: source staff", false, "append failed"); return; }
-        ensureMeasures(4);
+        var fx = drumCueFixture(r, "drum cue quarters-partial", "drum cue quarters-partial: source staff", 4);
+        if (!fx) return;
+        var drum = fx.drum, src = fx.src;
         var m4 = curScore.firstMeasure.nextMeasure.nextMeasure.nextMeasure;
         var bar4 = m4.firstSegment.tick;
         curScore.startCmd();
@@ -873,11 +888,8 @@ MuseScore {
         var selStart = bar4;
         var selEnd = bar4 + 1440;   // three quarters — leaves beat 4 unselected
 
-        var res = Effects.compCuesNotes(effectCtx(), {
-            selStart: selStart, selEnd: selEnd, measureTick: bar4, srcStaffIdx: src,
-            targets: [{ staffIdx: drum, isDrum: true }]
-        });
-        H.check(r, "drum cue quarters-partial: no error", res.error === "", res.error || "ok");
+        runDrumCue(r, "drum cue quarters-partial",
+                   { drum: drum, src: src, selStart: selStart, selEnd: selEnd, measureTick: bar4 });
         var voice = 2;
         var n = chordCount(selStart, selEnd, drum * 4 + voice);
         H.check(r, "drum cue quarters-partial: all 3 quarter cue notes", n === 3,
@@ -1034,10 +1046,8 @@ MuseScore {
     }
 
     onRun: {
-        if (!JazzKit.isSupportedVersion(mscoreMajorVersion, mscoreMinorVersion)) {
-            infoDialog.show(qsTr("This plugin is for MuseScore 4.4 or later"));
-            return;
-        }
+        var guard = JazzKit.guardScore(curScore, mscoreMajorVersion, mscoreMinorVersion);
+        if (guard !== "") { infoDialog.show(guard); return; }
         if (scoreHasNotes()) {
             infoDialog.show(qsTr("Refusing to run: the open score already contains notes.\n"
                 + "Open a blank score (File ▸ New) so the harness can build a throwaway fixture."));

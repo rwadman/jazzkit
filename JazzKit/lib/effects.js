@@ -17,7 +17,7 @@
  * @typedef {Object} EffectCtx
  * @property {MS.Score} curScore
  * @property {(type:number)=>*} [newElement]  QML newElement(Element.X)
- * @property {*} JazzKit    jazzkit.js  (selectStaffRange, countStaves)
+ * @property {*} JazzKit    jazzkit.js  (countStaves)
  * @property {*} Slashes    slashes.js  (emptyRestRegions — pure, unit-tested)
  * @property {*} [Articulations] articulations.js (classifyChord — pure, unit-tested)
  * @property {*} [Accidentals] accidentals.js (planStaff — pure, unit-tested)
@@ -33,6 +33,36 @@
  * @property {*} [LayoutBreak]  QML LayoutBreak enum
  * @property {*} [Accidental]   QML Accidental enum (NONE, FLAT, NATURAL, SHARP, …)
  */
+
+// --- shared plumbing --------------------------------------------------------
+
+/**
+ * Set one property, tolerating a build that doesn't expose it. Which element
+ * properties exist varies by MuseScore version, and a write to a missing one
+ * throws — so every optional decoration goes through here.
+ * @param {*} obj
+ * @param {string} key
+ * @param {*} value
+ * @returns {void}
+ */
+function _trySet(obj, key, value) {
+    try { obj[key] = value; } catch (e) { }
+}
+
+/**
+ * A fresh cursor parked on (staffIdx, voice) at `tick`. The track MUST be set
+ * before the rewind (api-gotchas) — rewinding first and assigning staffIdx after
+ * leaves the cursor on the old track.
+ * @param {EffectCtx} ctx  needs curScore
+ * @returns {MS.Cursor}
+ */
+function _cursorAt(ctx, staffIdx, voice, tick) {
+    var cur = ctx.curScore.newCursor();
+    cur.staffIdx = staffIdx;
+    cur.voice = voice;
+    cur.rewindToTick(tick);
+    return cur;
+}
 
 /**
  * Read each measure's timesig + voice-1 rests as plain data across [selStart,selEnd),
@@ -82,7 +112,8 @@ function _emptyRestRegions(ctx, selStart, selEnd, staffIdx) {
 // Limitation (v1): reproduces per-segment durations, pitches (incl. chords) and
 // articulations. It does not yet re-create tuplets or ties, and assumes the
 // written segments line up 1:1 with the source (true when no duration crosses a
-// barline). Drum targets are left to the slash path (handled separately).
+// barline). A DRUM target has no pitch to cue, so compCuesNotes routes it to
+// _writeDrumCueInto (the rhythm as cue notes in voice 3) instead.
 
 /**
  * Symbols of the fermatas attached at `segment` in `track`. A fermata is NOT a
@@ -114,10 +145,7 @@ function _readFermatas(ctx, segment, track) {
  */
 function _readSourceCRs(ctx, selStart, selEnd, srcStaffIdx) {
     var track = srcStaffIdx * 4;   // voice 1
-    var cursor = ctx.curScore.newCursor();
-    cursor.staffIdx = srcStaffIdx;   // set track BEFORE rewind (api-gotchas)
-    cursor.voice = 0;
-    cursor.rewindToTick(selStart);
+    var cursor = _cursorAt(ctx, srcStaffIdx, 0, selStart);
 
     var out = [];
     while (cursor.segment && cursor.tick < selEnd) {
@@ -206,24 +234,22 @@ function _setDurationTicks(ctx, cur, ticks) {
 }
 
 /**
- * Write the read source into voice 1 of one target staff: pitches/durations
- * first, then a second pass to cue-size the chords and copy their articulations.
- * @param {EffectCtx} ctx  needs curScore, newElement, Element, division
+ * Pass 1, shared by every writer: fill the gap from the cursor up to selStart, then
+ * write one chord/rest per source CR via `writeCR(cursor, cr)` (the cursor's input
+ * duration is already set).
+ *
+ * The cursor must be parked at the MEASURE start, not at selStart: we CANNOT
+ * rewindToTick(selStart) on an empty target — rewindToTick skips forward past any
+ * segment with no element in this track (api-gotchas), and a full-measure rest has
+ * its only segment at the MEASURE START, so a score-wide segment at selStart
+ * (created by the source staff) has no target element and the cursor skips forward
+ * into the NEXT measure. The leading rest both positions us and splits the spanning
+ * rest at selStart (the "divide existing notes" step).
+ * @param {EffectCtx} ctx  needs division
+ * @param {MS.Cursor} cur
+ * @param {*} writeCR  function(cursor, cr)
  */
-function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
-    // Pass 1 — durations + pitches.
-    // We CANNOT rewindToTick(selStart) on an empty target: rewindToTick skips
-    // forward past any segment with no element in this track (api-gotchas), and a
-    // full-measure rest has its only segment at the MEASURE START — so a score-wide
-    // segment at selStart (created by the source staff) has no target element, and
-    // the cursor skips forward into the NEXT measure. Instead rewind to the measure
-    // start (which always has a target chord/rest) and fill a leading rest up to
-    // selStart. That both positions us and splits the spanning rest at selStart
-    // (the "divide existing notes" step).
-    var cur = ctx.curScore.newCursor();
-    cur.staffIdx = staffIdx;
-    cur.voice = 0;
-    cur.rewindToTick(measureTick);
+function _writeSource(ctx, cur, selStart, src, writeCR) {
     if (cur.tick < selStart) {
         _setDurationTicks(ctx, cur, selStart - cur.tick);
         cur.addRest();
@@ -231,32 +257,52 @@ function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
     for (var i = 0; i < src.length; ++i) {
         var cr = src[i];
         cur.setDuration(cr.num, cr.den);
+        writeCR(cur, cr);
+    }
+}
+
+/**
+ * Pass 2, shared by every writer: walk what pass 1 wrote and decorate it, then
+ * reproduce the source markings there.
+ *
+ * The walk is by TICK, not by index: a source note whose duration crosses a barline
+ * was written as several TIED slices, so there can be more target chords than source
+ * CRs. `atCR(cursor, element)` decorates the written CR and returns the chord the
+ * markings belong on (null for a rest), so the markings land on the slice that
+ * starts at the source tick — the head of the tie group, never the tail.
+ * @param {EffectCtx} ctx  needs newElement, Element
+ * @param {MS.Cursor} cur
+ * @param {*} atCR  function(cursor, element) -> chord|null
+ */
+function _decorateWritten(ctx, cur, selStart, selEnd, markAt, atCR) {
+    while (cur.segment && cur.tick < selEnd) {
+        var chord = atCR(cur, cur.element);
+        if (cur.tick >= selStart) _addMarkings(ctx, cur, chord, markAt[cur.tick]);
+        cur.next();
+    }
+}
+
+/**
+ * Write the read source into voice 1 of one target staff: pitches/durations
+ * first, then a second pass to cue-size the chords and copy their articulations.
+ * @param {EffectCtx} ctx  needs curScore, newElement, Element, division
+ */
+function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
+    _writeSource(ctx, _cursorAt(ctx, staffIdx, 0, measureTick), selStart, src, function (cur, cr) {
         if (cr.isRest || cr.pitches.length === 0) {
             cur.addRest();
         } else {
             cur.addNote(cr.pitches[0], false);
             for (var k = 1; k < cr.pitches.length; ++k) cur.addNote(cr.pitches[k], true);
         }
-    }
+    });
 
-    // Pass 2 — cue-size + markings (articulations + fermatas). A source note whose
-    // duration crosses a barline was written as several TIED slices, so there can be
-    // more target chords than source notes: walk by TICK (not index) — every cue
-    // chord in the range is cue-sized, the markings go on the slice starting at the
-    // source tick.
-    var markAt = _markingsByTick(src);
-
-    var c2 = ctx.curScore.newCursor();
-    c2.staffIdx = staffIdx;
-    c2.voice = 0;
-    c2.rewindToTick(selStart);
-    while (c2.segment && c2.tick < selEnd) {
-        var wel = c2.element;
-        var isChord = !!wel && wel.type === ctx.Element.CHORD;
-        if (isChord) { try { wel.small = true; } catch (e) { } }
-        _addMarkings(ctx, c2, isChord ? wel : null, markAt[c2.tick]);
-        c2.next();
-    }
+    _decorateWritten(ctx, _cursorAt(ctx, staffIdx, 0, selStart), selStart, selEnd,
+        _markingsByTick(src), function (cur, el) {
+            if (!el || el.type !== ctx.Element.CHORD) return null;
+            _trySet(el, "small", true);      // every cue slice is cue-sized
+            return el;
+        });
 }
 
 /**
@@ -302,6 +348,13 @@ function _partForStaff(ctx, staffIdx) {
     return null;
 }
 
+/** The drumset of the staff's instrument, or null on a pitched staff. */
+function _drumsetFor(ctx, staffIdx) {
+    var part = _partForStaff(ctx, staffIdx);
+    var inst = part && part.instrumentAtTick ? part.instrumentAtTick(0) : null;
+    return inst ? inst.drumset : null;
+}
+
 /**
  * The pitch to write into staffIdx. A pitched staff takes any pitch (SLASH_PITCH,
  * hidden by FIXED_LINE + play off). A DRUM staff drops invalid drum pitches
@@ -310,9 +363,7 @@ function _partForStaff(ctx, staffIdx) {
  * in the voice we're writing. Returns -1 if a drum staff has no usable pitch.
  */
 function _slashPitch(ctx, staffIdx, wantVoice) {
-    var part = _partForStaff(ctx, staffIdx);
-    var inst = part && part.instrumentAtTick ? part.instrumentAtTick(0) : null;
-    var ds = inst ? inst.drumset : null;
+    var ds = _drumsetFor(ctx, staffIdx);
     if (!ds) return SLASH_PITCH;   // pitched staff
     var first = -1;
     for (var p = 0; p < 128; ++p) {
@@ -330,19 +381,19 @@ function _slashPitch(ctx, staffIdx, wantVoice) {
  * @param {EffectCtx} ctx  needs Direction, NoteHeadGroup, Beam
  */
 function _applySlashChord(ctx, chord, stemless, line) {
-    try { chord.stemDirection = ctx.Direction.DOWN; } catch (e) { }
+    _trySet(chord, "stemDirection", ctx.Direction.DOWN);
     if (stemless) {
-        try { chord.noStem = true; } catch (e2) { }
-        try { chord.beamMode = ctx.Beam.NONE; } catch (e3) { }
+        _trySet(chord, "noStem", true);
+        _trySet(chord, "beamMode", ctx.Beam.NONE);
     }
     var notes = chord.notes || [];
     for (var i = 0; i < notes.length; ++i) {
         var n = notes[i];
-        try { n.headGroup = ctx.NoteHeadGroup.HEAD_SLASH; } catch (e4) { }
-        try { n.fixed = true; } catch (e5) { }
-        try { n.fixedLine = line; } catch (e6) { }
-        try { n.play = false; } catch (e7) { }
-        if (i > 0) { try { n.visible = false; } catch (e8) { } }   // hide all but first notehead
+        _trySet(n, "headGroup", ctx.NoteHeadGroup.HEAD_SLASH);
+        _trySet(n, "fixed", true);
+        _trySet(n, "fixedLine", line);
+        _trySet(n, "play", false);
+        if (i > 0) _trySet(n, "visible", false);   // hide all but first notehead
     }
 }
 
@@ -354,32 +405,19 @@ function _applySlashChord(ctx, chord, stemless, line) {
  */
 function _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
     var pitch = _slashPitch(ctx, staffIdx, 0);   // valid drum pitch on a drum staff
-    var cur = ctx.curScore.newCursor();
-    cur.staffIdx = staffIdx;
-    cur.voice = 0;
-    cur.rewindToTick(measureTick);
-    if (cur.tick < selStart) { _setDurationTicks(ctx, cur, selStart - cur.tick); cur.addRest(); }
-    for (var i = 0; i < src.length; ++i) {
-        var cr = src[i];
-        cur.setDuration(cr.num, cr.den);
+    _writeSource(ctx, _cursorAt(ctx, staffIdx, 0, measureTick), selStart, src, function (cur, cr) {
         if (cr.isRest) cur.addRest();
         else cur.addNote(pitch, false);
-    }
+    });
 
     // Pass 2 — slash-ify, and carry the source's markings (staccato, tenuto,
-    // fermata, …) onto the matching slash / rest, by tick as in _writeCueInto.
-    var markAt = _markingsByTick(src);
-    var c2 = ctx.curScore.newCursor();
-    c2.staffIdx = staffIdx;
-    c2.voice = 0;
-    c2.rewindToTick(selStart);
-    while (c2.segment && c2.tick < selEnd) {
-        var wel = c2.element;
-        var isChord = !!wel && wel.type === ctx.Element.CHORD;
-        if (isChord) _applySlashChord(ctx, wel, false, 4);
-        _addMarkings(ctx, c2, isChord ? wel : null, markAt[c2.tick]);
-        c2.next();
-    }
+    // fermata, …) onto the matching slash / rest.
+    _decorateWritten(ctx, _cursorAt(ctx, staffIdx, 0, selStart), selStart, selEnd,
+        _markingsByTick(src), function (cur, el) {
+            if (!el || el.type !== ctx.Element.CHORD) return null;
+            _applySlashChord(ctx, el, false, 4);
+            return el;
+        });
 }
 
 // --- Drum comp cue (direct-API cue notes in voice 3, above the staff) --------
@@ -409,9 +447,7 @@ var DRUM_CUE_LINE = -1;
  *  notehead, silent). Returns -1 if the drumset has no valid pitch, or null on a
  *  pitched staff (no drumset → caller falls back to the slash writer). */
 function _drumCuePitch(ctx, staffIdx) {
-    var part = _partForStaff(ctx, staffIdx);
-    var inst = part && part.instrumentAtTick ? part.instrumentAtTick(0) : null;
-    var ds = inst ? inst.drumset : null;
+    var ds = _drumsetFor(ctx, staffIdx);
     if (!ds) return null;                       // pitched staff
     for (var p = 0; p < 128; ++p) if (ds.isValid(p)) return p;
     return -1;                                  // drumset with no valid pitch (unexpected)
@@ -420,15 +456,15 @@ function _drumCuePitch(ctx, staffIdx) {
 /** Dress a written chord as a drum cue note (cue-size, silent, stem up, above staff,
  *  NORMAL notehead). */
 function _applyDrumCueChord(ctx, chord) {
-    try { chord.small = true; } catch (e) { }
-    try { chord.stemDirection = ctx.Direction.UP; } catch (e2) { }
+    _trySet(chord, "small", true);
+    _trySet(chord, "stemDirection", ctx.Direction.UP);
     var notes = chord.notes || [];
     for (var i = 0; i < notes.length; ++i) {
         var n = notes[i];
-        try { n.headGroup = ctx.NoteHeadGroup.HEAD_NORMAL; } catch (e4) { }
-        try { n.fixed = true; } catch (e5) { }
-        try { n.fixedLine = DRUM_CUE_LINE; } catch (e6) { }
-        try { n.play = false; } catch (e7) { }
+        _trySet(n, "headGroup", ctx.NoteHeadGroup.HEAD_NORMAL);
+        _trySet(n, "fixed", true);
+        _trySet(n, "fixedLine", DRUM_CUE_LINE);
+        _trySet(n, "play", false);
     }
 }
 
@@ -455,49 +491,36 @@ function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
     // middle into a gap+eighth). A complete tiling means every replacement is an
     // exact in-place swap. addRest goes through enterRest — no voice-forcing.
     var mEnd = _measureEndTick(ctx, measureTick);
-    var cur = ctx.curScore.newCursor();
-    cur.staffIdx = staffIdx;
-    cur.voice = 0;                      // voice 0 always has content
-    cur.rewindToTick(measureTick);
+    var cur = _cursorAt(ctx, staffIdx, 0, measureTick);   // voice 0 always has content
     cur.voice = V;                      // switch (keeps the segment; api-gotchas empty-voice trick)
-    if (cur.tick < selStart) { _setDurationTicks(ctx, cur, selStart - cur.tick); cur.addRest(); }
     var noteTicks = {};                 // tick → true at each note position
-    for (var i = 0; i < src.length; ++i) {
-        var cr = src[i];
-        if (!cr.isRest) noteTicks[cur.tick] = true;
-        cur.setDuration(cr.num, cr.den);
-        cur.addRest();
-    }
+    _writeSource(ctx, cur, selStart, src, function (c, cr) {
+        if (!cr.isRest) noteTicks[c.tick] = true;
+        c.addRest();
+    });
     if (cur.tick < mEnd) { _setDurationTicks(ctx, cur, mEnd - cur.tick); cur.addRest(); }
 
     // Pass 2: replace each note-beat rest with a cue chord. Rewind on voice 0 (has a
     // boundary at measureTick) then switch to voice V and walk the shell. Since the
     // shell fully tiles the measure, each note-beat swap is exact — no reflow shifts
     // the segments the cursor still has to visit.
-    var markAt = _markingsByTick(src);
-    var wc = ctx.curScore.newCursor();
-    wc.staffIdx = staffIdx;
-    wc.voice = 0;
-    wc.rewindToTick(measureTick);
+    var wc = _cursorAt(ctx, staffIdx, 0, measureTick);
     wc.voice = V;
-    while (wc.segment && wc.tick < selEnd) {
-        var chord = null;
-        if (noteTicks[wc.tick] && wc.element && wc.element.type === ctx.Element.REST) {
-            var restDur = wc.element.duration;          // capture before replacing
-            chord = ctx.newElement(ctx.Element.CHORD);
-            var note = ctx.newElement(ctx.Element.NOTE);
-            note.pitch = pitch;
-            chord.add(note);
-            wc.add(chord);                              // replaces the rest at wc.track (voice V)
-            try { chord.duration = restDur; } catch (e) { }   // fix invalid duration
-            _applyDrumCueChord(ctx, chord);
-        }
-        // Markings go on the chord we just built (a plugin-owned chord is already in
-        // the score after wc.add, so chord.add undo-adds normally); fermatas via the
-        // cursor, onto the segment.
-        if (wc.tick >= selStart) _addMarkings(ctx, wc, chord, markAt[wc.tick]);
-        wc.next();
-    }
+    // The markings go on the chord built here (a plugin-owned chord is already in the
+    // score after wc.add, so chord.add undo-adds normally); fermatas go via the
+    // cursor, onto the segment — hence the `selStart` guard on the leading shell rest.
+    _decorateWritten(ctx, wc, selStart, selEnd, _markingsByTick(src), function (c, el) {
+        if (!noteTicks[c.tick] || !el || el.type !== ctx.Element.REST) return null;
+        var restDur = el.duration;                  // capture before replacing
+        var chord = ctx.newElement(ctx.Element.CHORD);
+        var note = ctx.newElement(ctx.Element.NOTE);
+        note.pitch = pitch;
+        chord.add(note);
+        c.add(chord);                               // replaces the rest at c.track (voice V)
+        _trySet(chord, "duration", restDur);        // fix invalid duration
+        _applyDrumCueChord(ctx, chord);
+        return chord;
+    });
 }
 
 /** The first tick after the measure that contains `tick` (its exclusive end). */
@@ -508,7 +531,9 @@ function _measureEndTick(ctx, tick) {
 }
 
 /**
- * To Comp Slashes (direct API). `targets` is an array of staff indices.
+ * To Comp Slashes (direct API). `targets` rows are either a bare staff index or the
+ * `{staffIdx, isDrum}` object compCuesNotes takes (`isDrum` is irrelevant here — the
+ * slash writer already picks a valid drum pitch), so both forms share one row shape.
  * @param {EffectCtx} ctx  needs curScore, Element, Cursor, Direction, NoteHeadGroup, division
  * @param {*} params  { selStart, selEnd, measureTick, srcStaffIdx, targets }
  * @returns {{targetsDone:number, error:string}}
@@ -520,7 +545,9 @@ function compSlashesNotes(ctx, params) {
     ctx.curScore.startCmd();
     var done = 0;
     for (var t = 0; t < params.targets.length; ++t) {
-        _writeSlashRhythmInto(ctx, params.targets[t], params.measureTick, params.selStart, params.selEnd, src);
+        var tgt = params.targets[t];
+        var s = (typeof tgt === "number") ? tgt : tgt.staffIdx;
+        _writeSlashRhythmInto(ctx, s, params.measureTick, params.selStart, params.selEnd, src);
         ++done;
     }
     ctx.curScore.endCmd();
@@ -535,7 +562,9 @@ function compSlashesNotes(ctx, params) {
 // so rewindToTick(region.start) lands exactly there (no gap-fill, which would
 // clobber earlier beats).
 
-/** The measure containing `tick`, or null. */
+/** The measure containing `tick`, or null. Walks from firstMeasure every call, so
+ *  a per-region caller is O(measures × regions) — fine at score scale; revisit with
+ *  a cached measure list only if a long score ever feels slow. */
 function _measureAt(ctx, tick) {
     var m = ctx.curScore.firstMeasure;
     while (m) {
@@ -555,10 +584,7 @@ function _writeBeatSlashes(ctx, staffIdx, start, end, beat) {
     var pitch = _slashPitch(ctx, staffIdx, 0);
     if (pitch < 0) return false;            // drum staff with no usable pitch
 
-    var cur = ctx.curScore.newCursor();
-    cur.staffIdx = staffIdx;
-    cur.voice = 0;
-    cur.rewindToTick(start);
+    var cur = _cursorAt(ctx, staffIdx, 0, start);
     if (cur.tick !== start) return false;   // guard: don't corrupt earlier beats
 
     var f = ticksToFraction(beat, ctx.division);
@@ -567,10 +593,7 @@ function _writeBeatSlashes(ctx, staffIdx, start, end, beat) {
         cur.addNote(pitch, false);
     }
 
-    var c2 = ctx.curScore.newCursor();
-    c2.staffIdx = staffIdx;
-    c2.voice = 0;
-    c2.rewindToTick(start);
+    var c2 = _cursorAt(ctx, staffIdx, 0, start);
     while (c2.segment && c2.tick < end) {
         if (c2.element && c2.element.type === ctx.Element.CHORD) _applySlashChord(ctx, c2.element, true, 4);
         c2.next();
@@ -623,8 +646,8 @@ function _tryAddHiddenStaccato(ctx, el, cursor, wantAbove) {
         var cand = candidates[j];
         if (!cand) continue;
         var s = ctx.newElement(ctx.Element.ARTICULATION);
-        try { s.hidden = true; } catch (e) { }
-        try { s.visible = false; } catch (e) { }
+        _trySet(s, "hidden", true);
+        _trySet(s, "visible", false);
         s.symbol = cand;
         cursor.add(s);
 
@@ -633,8 +656,8 @@ function _tryAddHiddenStaccato(ctx, el, cursor, wantAbove) {
             var a2 = articulations[k];
             if (!a2) continue;
             if (ctx.Articulations.articSymbol(a2) == cand) {
-                try { a2.hidden = true; } catch (e) { }
-                try { a2.visible = false; } catch (e) { }
+                _trySet(a2, "hidden", true);
+                _trySet(a2, "visible", false);
                 return true;
             }
         }
@@ -661,8 +684,8 @@ function _processMarcatoStaccato(ctx, el, cursor) {
         for (var k = 0; k < c.staccatoIndices.length; ++k) {
             var a = articulations[c.staccatoIndices[k]];
             if (!a) continue;
-            try { a.hidden = true; } catch (e) { }
-            try { a.visible = false; } catch (e) { }
+            _trySet(a, "hidden", true);
+            _trySet(a, "visible", false);
         }
         result.hidden = 1;
         return result;
@@ -723,9 +746,7 @@ function fixMarcatoStaccatos(ctx) {
 
 /** True for an unpitched percussion staff, where accidentals are meaningless. */
 function _isDrumStaff(ctx, staffIdx) {
-    var part = _partForStaff(ctx, staffIdx);
-    var inst = part && part.instrumentAtTick ? part.instrumentAtTick(0) : null;
-    return !!(inst && inst.drumset);
+    return !!_drumsetFor(ctx, staffIdx);
 }
 
 /** Append plain note data (+ the live objects, index-aligned) for one chord. */
@@ -786,11 +807,11 @@ function _setAccidental(ctx, note, typeName, bracket) {
     var pitch = note.pitch;
     note.accidentalType = type;
     if (note.pitch !== pitch) {                     // shouldn't happen — never leave it wrong
-        try { note.accidentalType = ctx.Accidental.NONE; } catch (e) { }
+        _trySet(note, "accidentalType", ctx.Accidental.NONE);
         return false;
     }
     if (bracket && note.accidental) {
-        try { note.accidental.accidentalBracket = bracket; } catch (e2) { }
+        _trySet(note.accidental, "accidentalBracket", bracket);
     }
     return true;
 }
@@ -805,7 +826,7 @@ function _clearAccidental(ctx, note) {
     var was = note.accidentalType;
     note.accidentalType = ctx.Accidental.NONE;
     if (note.pitch !== pitch) {
-        try { note.accidentalType = was; } catch (e) { }
+        _trySet(note, "accidentalType", was);
         return false;
     }
     return true;
@@ -887,8 +908,6 @@ function applyLineBreaks(ctx, measures, breakMeasures) {
 }
 
 // Exposed for the Node loader / harness; QML reaches the functions by name directly.
-// (Effects touch the API, so they aren't Node-unit-tested — this trailer keeps the
-// same export shape as the pure libs.)
 var effectsLib = {
     compCuesNotes: compCuesNotes,
     compSlashesNotes: compSlashesNotes,
@@ -899,5 +918,5 @@ var effectsLib = {
     applyLineBreaks: applyLineBreaks
 };
 
-// require()-able from an extension macro; no-op under QML import / Node loader.
+// Export trailer — MANDATORY, see api-gotchas "macros actions".
 if (typeof exports !== "undefined") { exports = effectsLib; }
