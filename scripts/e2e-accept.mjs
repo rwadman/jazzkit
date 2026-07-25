@@ -1,11 +1,12 @@
 // Stamp a passing harness run into harness/acceptance.json, fingerprinted with the
 // current e2e source. Called automatically by scripts/e2e.sh after a green report,
 // or by hand:  node scripts/e2e-accept.mjs <report-file>
-// Refuses to stamp anything that isn't a clean pass.
-import { readFileSync, writeFileSync } from "node:fs";
+// Refuses to stamp anything that isn't a clean pass, or a report that predates the
+// code it would vouch for.
+import { readFileSync, writeFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { fingerprint } from "./e2e-fingerprint.mjs";
+import { fingerprint, TRACKED } from "./e2e-fingerprint.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -17,6 +18,23 @@ const summary = report.split("\n")[0];
 if (!/^HARNESS PASSED/.test(summary) || /\bFAIL\b/.test(report)) {
     console.error("Refusing to record acceptance: report is not a clean pass.\n" + summary);
     process.exit(1);
+}
+
+// A leftover jazzkit-harness-report.txt from an earlier session would otherwise be
+// stamped against TODAY's fingerprint — an acceptance record for a run that never
+// happened. e2e.sh deletes stale reports before launching; this is the backstop for
+// a hand-run (and it caught a real one once). The report must be at least as new as
+// every file it vouches for.
+const reportTime = statSync(reportPath).mtimeMs;
+for (const rel of TRACKED) {
+    const srcTime = statSync(join(ROOT, rel)).mtimeMs;
+    if (srcTime > reportTime) {
+        console.error(
+            "Refusing to record acceptance: the report is older than the code it would\n" +
+            "vouch for (" + rel + " changed after the run). Re-run scripts/e2e.sh."
+        );
+        process.exit(1);
+    }
 }
 
 const record = {

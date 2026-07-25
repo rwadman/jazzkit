@@ -633,12 +633,11 @@ function fillEmptyBeatsNotes(ctx, selStart, selEnd, staffIdx) {
  * Try to add a hidden staccato to a chord, matching the marcato placement. Adds
  * the first candidate SymId that takes, then hides it.
  * @param {EffectCtx} ctx
- * @param {*} el      the chord element
- * @param {MS.Cursor} cursor
+ * @param {MS.Cursor} cursor   positioned on the chord
  * @param {boolean} wantAbove
  * @returns {boolean}
  */
-function _tryAddHiddenStaccato(ctx, el, cursor, wantAbove) {
+function _tryAddHiddenStaccato(ctx, cursor, wantAbove) {
     var candidates = [];
     try { candidates = ctx.Articulations.staccatoCandidates(ctx.SymId, wantAbove); } catch (e) { candidates = []; }
 
@@ -646,21 +645,17 @@ function _tryAddHiddenStaccato(ctx, el, cursor, wantAbove) {
         var cand = candidates[j];
         if (!cand) continue;
         var s = ctx.newElement(ctx.Element.ARTICULATION);
+        // The flags set BEFORE cursor.add are the ones that stick: cursor.add
+        // attaches the very element we built, so there is nothing to look up again
+        // afterwards. (This used to be hedged both ways — a post-add rescan of
+        // el.articulations re-set the same two flags. The harness assertions
+        // "marcato: marcato-only chord gained a hidden staccato" and "…pre-existing
+        // staccato is now hidden" are what tell the two halves apart.)
         _trySet(s, "hidden", true);
         _trySet(s, "visible", false);
         s.symbol = cand;
         cursor.add(s);
-
-        var articulations = el.articulations || [];
-        for (var k = 0; k < articulations.length; ++k) {
-            var a2 = articulations[k];
-            if (!a2) continue;
-            if (ctx.Articulations.articSymbol(a2) == cand) {
-                _trySet(a2, "hidden", true);
-                _trySet(a2, "visible", false);
-                return true;
-            }
-        }
+        return true;
     }
     return false;
 }
@@ -691,7 +686,7 @@ function _processMarcatoStaccato(ctx, el, cursor) {
         return result;
     }
 
-    if (_tryAddHiddenStaccato(ctx, el, cursor, c.addAbove)) result.added = 1;
+    if (_tryAddHiddenStaccato(ctx, cursor, c.addAbove)) result.added = 1;
     return result;
 }
 

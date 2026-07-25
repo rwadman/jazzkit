@@ -8,25 +8,25 @@ Findings are split into two hand-off documents:
   the macro, `lib/*.js`.
 - [02-harness-and-tooling.md](02-harness-and-tooling.md) — `harness/`, `test/`,
   `scripts/`, CI, README/CLAUDE.md, `plans/`.
-- **[03-remaining.md](03-remaining.md) — the open list.** Everything not implemented,
-  plus the two declined items and their reasoning. Start here if you're picking this up;
-  01 and 02 are now a record of completed work.
+- [03-remaining.md](03-remaining.md) — what the first pass left open, and how the
+  second pass closed it. **Nothing is open any more**; read it before touching comp-form
+  dialog sizing (P8c) or `_tryAddHiddenStaccato` (P11), which is where the surprises
+  were.
 
 Each item has an ID (`P1`, `T3`, …), a location, why it's a problem, and the proposed
 change. Nothing here is a behaviour change request: every item is meant to leave the
 plugin doing exactly what it does today, unless explicitly marked **behaviour**.
 
-## Status (implemented 2026-07-25)
+## Status (closed 2026-07-25)
 
 Headers are marked `-- DONE`, `-- PARTLY DONE`, `-- WON'T DO` or `-- NOT DONE`, each with
-an **Outcome** note. Summary of the 29 items: **24 fully done** (P1–P3, P5, P7, P9, P10,
-P12, P14, P15, T1–T14), 2 partial (P4, P8), 2 declined with reasons (P6, P13), 1 blocked
-on a GUI run (P11).
+an **Outcome** note. Of the 29 items: **26 done**, 3 declined with reasons (P6, P8c, P13).
+P4, P11 and the T5 residual were finished in the second pass and verified in the GUI
+(comp dialogs, the harness run, the Plugins menu).
 
-Checks after the work: `npm test` **128 passed**, `npm run typecheck` clean,
-`npm run check` clean (now covering `harness/*.qml` too).
-`npm run e2e:check` **fails by design** — see the guardrail below; run `scripts/e2e.sh`
-in the GUI and commit the refreshed `harness/acceptance.json`.
+Checks: `npm run verify` green — `npm test` **128 passed**, `npm run typecheck` clean,
+`npm run check` clean (covering `harness/*.qml` too), `npm run e2e:check` **OK**
+(`HARNESS PASSED — 75 ok.`, re-stamped for the current `effects.js`).
 
 ## State at time of review
 

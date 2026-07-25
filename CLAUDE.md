@@ -26,7 +26,10 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   action is a `type: "form"` `.qml` (a `MuseScore {}` component shown as a view):
   `autofix_settings.qml` (the option panel for the `autofix.js` macro),
   `comp_cues.qml`, `comp_slashes.qml`,
-  `fill_empty_slashes.qml`, `line_breaks.qml`. **A form gets no `onRun`** — work
+  `fill_empty_slashes.qml`, `line_breaks.qml`. The two comp actions are thin roots
+  around the shared `CompTargetsForm.qml` (a PascalCase **component**, not an
+  action — no `MuseScore{}` root, resolved implicitly from the bundle dir, handed
+  the plugin globals as its `ctx`). **A form gets no `onRun`** — work
   runs from `Component.onCompleted` / button handlers — and **cannot dispatch
   notation `cmd()`s** (focus trap), so every effect is **direct-API only** (cursor
   note input + element properties; slash notation replicates `Chord::setSlash`).
