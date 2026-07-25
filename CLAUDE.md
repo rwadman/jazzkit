@@ -24,13 +24,20 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   is by manifest, not `menuPath`/`categoryCode` — see api-gotchas "Menus"). Pinned
   `"apiversion": 1` for the bare `curScore`/`Cursor`/`SymId`/enum globals. Every
   action is a `type: "form"` `.qml` (a `MuseScore {}` component shown as a view):
-  `fix_marcato_staccatos.qml`, `comp_cues.qml`, `comp_slashes.qml`,
+  `autofix_settings.qml` (the option panel for the `autofix.js` macro),
+  `comp_cues.qml`, `comp_slashes.qml`,
   `fill_empty_slashes.qml`, `line_breaks.qml`. **A form gets no `onRun`** — work
   runs from `Component.onCompleted` / button handlers — and **cannot dispatch
   notation `cmd()`s** (focus trap), so every effect is **direct-API only** (cursor
   note input + element properties; slash notation replicates `Chord::setSlash`).
+  The exception is `autofix.js`, a `type: "macros"` action: a form is a *view*, so
+  it ALWAYS opens a window — an action that takes no input and should run silently
+  must be a macro (`main()`, no UI, `require("lib/x.js")` instead of `import`,
+  `console.log` instead of a dialog). `test/require-exports.test.mjs` emulates the
+  extension script engine so the macro's module wiring is unit-tested; the effects
+  it calls are the same ones the GUI harness drives.
 - `JazzKit/lib/*.js` — shared **pure** JS libraries (`jazzkit.js`,
-  `articulations.js`, `linebreaks.js`, `slashes.js`) plus `effects.js` (the
+  `accidentals.js`, `articulations.js`, `linebreaks.js`, `slashes.js`) plus `effects.js` (the
   API-touching effect layer — cursor/direct-API mutations, `// @ts-check`ed but
   exercised by the GUI harness + a fake cursor in `test/effects.test.mjs`).
   Imported into a form via `import "lib/x.js" as X`. Each ends with a per-file

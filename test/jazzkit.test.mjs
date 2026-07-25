@@ -176,3 +176,34 @@ test("saveJsonTag: tolerates missing excerpts and null partScore", () => {
 test("saveJsonTag: no score is a no-op (no throw)", () => {
     JazzKit.saveJsonTag(null, "jazzKit", { d: true });
 });
+
+// --- Autofix settings (shared by autofix.qml and autofix_settings.qml) -------
+
+test("loadAutofixSettings: defaults when nothing is stored (and with no score)", () => {
+    eq(JazzKit.loadAutofixSettings(fakeMetaScore()), JazzKit.AUTOFIX_DEFAULTS);
+    eq(JazzKit.loadAutofixSettings(null), JazzKit.AUTOFIX_DEFAULTS);
+});
+
+test("autofix settings round-trip", () => {
+    const sc = fakeMetaScore();
+    JazzKit.saveAutofixSettings(sc, { marcato: false, courtesy: true, bracket: 2 });
+    eq(JazzKit.loadAutofixSettings(sc), { marcato: false, courtesy: true, bracket: 2 });
+});
+
+test("loadAutofixSettings: a partial tag keeps the defaults for what's missing", () => {
+    const sc = fakeMetaScore({ [JazzKit.AUTOFIX_TAG]: JSON.stringify({ marcato: false }) });
+    eq(JazzKit.loadAutofixSettings(sc), { marcato: false, courtesy: true, bracket: 1 });
+});
+
+test("loadAutofixSettings: an out-of-range bracket falls back to the default", () => {
+    const sc = fakeMetaScore({ [JazzKit.AUTOFIX_TAG]: JSON.stringify({ bracket: 9 }) });
+    eq(JazzKit.loadAutofixSettings(sc).bracket, 1);
+    const sc2 = fakeMetaScore({ [JazzKit.AUTOFIX_TAG]: "{not json" });
+    eq(JazzKit.loadAutofixSettings(sc2), JazzKit.AUTOFIX_DEFAULTS);
+});
+
+test("saveAutofixSettings: bracket 0 (no bracket) survives the round-trip", () => {
+    const sc = fakeMetaScore();
+    JazzKit.saveAutofixSettings(sc, { marcato: true, courtesy: true, bracket: 0 });
+    eq(JazzKit.loadAutofixSettings(sc).bracket, 0);
+});

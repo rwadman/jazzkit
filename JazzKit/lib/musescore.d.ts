@@ -87,6 +87,8 @@ declare namespace MS {
         tick: number;
         element: Element | null;
         segment: Segment | null;
+        /** Key signature in force at the cursor: signed sharp count (flats negative). */
+        keySignature?: number;
         measure: Measure | null;
         next(): boolean;
         /** Attach an element (e.g. a hidden articulation) at the cursor. */
@@ -126,6 +128,8 @@ declare namespace MS {
         notes?: Note[];
         /** Articulations attached to a chord. */
         articulations?: Articulation[];
+        /** Grace-note chords attached to a chord. */
+        graceNotes?: Element[];
         /** Chord stem direction (a Direction enum value). */
         stemDirection?: any;
         /** Chord has no stem (slash-fill / stemless slashes). */
@@ -147,6 +151,23 @@ declare namespace MS {
         /** Whether the note sounds on playback. */
         play?: boolean;
         visible?: boolean;
+        /** Written tonal pitch class (the spelling shown on this staff). */
+        tpc?: number;
+        /** Concert-pitch tonal pitch class (spelling before transposition). */
+        tpc1?: number;
+        /** The engraved accidental, or null. Read-only; write via accidentalType. */
+        accidental?: Accidental | null;
+        /** Accidental enum value. Writing it routes through
+         *  EditNote::changeAccidental and MAY change `pitch` (see effects.js). */
+        accidentalType?: any;
+        /** The tie ending on this note, or null (a tie continuation). */
+        tieBack?: any;
+    }
+
+    /** An engraved accidental attached to a note. */
+    interface Accidental {
+        /** 0 none, 1 parenthesis, 2 bracket (AccidentalBracket). */
+        accidentalBracket?: number;
     }
 
     /** A SymId enum value — a number in current MuseScore, sometimes a name string. */

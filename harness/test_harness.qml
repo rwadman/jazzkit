@@ -7,6 +7,7 @@ import Muse.UiComponents
 import "lib/jazzkit.js" as JazzKit
 import "lib/slashes.js" as Slashes
 import "lib/articulations.js" as Articulations
+import "lib/accidentals.js" as Accidentals
 import "lib/linebreaks.js" as LineBreaks
 import "lib/effects.js" as Effects
 import "lib/harness.js" as H
@@ -71,6 +72,7 @@ MuseScore {
         return {
             curScore: curScore, newElement: newElement,
             JazzKit: JazzKit, Slashes: Slashes, Articulations: Articulations,
+            Accidentals: Accidentals, Accidental: Accidental,
             Segment: Segment, Element: Element, Cursor: Cursor,
             SymId: SymId, LayoutBreak: LayoutBreak, division: division,
             Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam
@@ -440,6 +442,93 @@ MuseScore {
                 "visibilities=[" + v1.join(",") + "]");
         H.check(r, "marcato: pre-existing staccato is now hidden", v2.length > 0 && v2[0] === false,
                 "visibilities=[" + v2.join(",") + "]");
+    }
+
+    // Courtesy Accidentals — Effects.fixCourtesyAccidentals (whole score). Fixture,
+    // on its own staff, of the three things that must happen:
+    //   bar 1 beat 1: a chromatic note   → its REQUIRED accidental must survive;
+    //   bar 1 beat 2: the same note again, given a redundant accidental by hand
+    //                                    → must be REMOVED;
+    //   bar 2 beat 1: the diatonic spelling of that same staff line
+    //                                    → must GAIN a bracketed courtesy accidental.
+    // Appended instruments transpose, so we don't know the staff's key signature:
+    // probe which of the two F-line spellings actually carries an accidental here
+    // and build the fixture around that (one of them always does).
+    function caseCourtesyAccidentals(r) {
+        var staffIdx = appendPitched();
+        if (staffIdx < 0) { H.check(r, "courtesy: fixture staff", false, "append failed"); return; }
+        ensureMeasures(2);
+        var bar2 = curScore.firstMeasure.nextMeasure;
+        if (!bar2) { H.skip(r, "courtesy: adds a bracketed courtesy accidental", "no second measure"); return; }
+        var t2 = bar2.firstSegment.tick;
+
+        function writeQuarterAt(tick, pitch) {
+            curScore.startCmd();
+            var c = curScore.newCursor();
+            c.staffIdx = staffIdx; c.voice = 0;
+            c.rewindToTick(tick);
+            c.setDuration(1, 4); c.addNote(pitch);
+            curScore.endCmd();
+        }
+        function noteAt(tick, idx) {
+            var ch = chordAt(staffIdx, tick + idx * 480);
+            return (ch && ch.notes.length > 0) ? ch.notes[0] : null;
+        }
+
+        writeQuarterAt(0, 66);
+        var probe = noteAt(0, 0);
+        if (!probe) { H.check(r, "courtesy: fixture note", false, "no note written"); return; }
+        var altered = probe.accidental ? 66 : 65;   // the chromatic spelling on THIS staff
+        var natural = (altered === 66) ? 65 : 66;   // the one the key signature gives
+
+        writeQuarterAt(0, altered);
+        writeQuarterAt(480, altered);
+        writeQuarterAt(t2, natural);
+
+        var n1 = noteAt(0, 0), n2 = noteAt(0, 1), n3 = noteAt(t2, 0);
+        if (!n1 || !n2 || !n3) { H.check(r, "courtesy: fixture notes", false, "missing note"); return; }
+        // Hand the repeat a redundant accidental (MuseScore doesn't write one itself).
+        curScore.startCmd();
+        n2.accidentalType = n1.accidentalType;
+        curScore.endCmd();
+        var pitches = [n1.pitch, n2.pitch, n3.pitch];
+        H.check(r, "courtesy: fixture has the required + a redundant accidental",
+                !!n1.accidental && !!n2.accidental && !n3.accidental,
+                "acc=[" + !!n1.accidental + "," + !!n2.accidental + "," + !!n3.accidental + "]");
+
+        var res = Effects.fixCourtesyAccidentals(effectCtx(), { bracket: 1 });
+
+        // Score-wide counts (other cases' staves are in range too), so assert the
+        // direction, not exact totals — but a skip means a write moved a pitch and
+        // had to be rolled back, which must never happen.
+        H.check(r, "courtesy: added and removed something, nothing rolled back",
+                res.added >= 1 && res.removed >= 1 && res.skipped === 0,
+                "added=" + res.added + " removed=" + res.removed + " skipped=" + res.skipped);
+
+        H.check(r, "courtesy: required accidental kept", !!n1.accidental,
+                "accidentalType=" + n1.accidentalType);
+        H.check(r, "courtesy: redundant repeat accidental removed", !n2.accidental,
+                "accidentalType=" + n2.accidentalType);
+        H.check(r, "courtesy: next bar gained a courtesy accidental", !!n3.accidental,
+                "accidentalType=" + n3.accidentalType);
+        H.check(r, "courtesy: the added accidental is bracketed (parenthesis)",
+                !!n3.accidental && n3.accidental.accidentalBracket === 1,
+                n3.accidental ? "bracket=" + n3.accidental.accidentalBracket : "no accidental");
+        // The invariant every write is guarded by: spelling changes, sound doesn't.
+        H.check(r, "courtesy: no note's pitch changed",
+                n1.pitch === pitches[0] && n2.pitch === pitches[1] && n3.pitch === pitches[2],
+                "before=[" + pitches.join(",") + "] after=["
+                    + n1.pitch + "," + n2.pitch + "," + n3.pitch + "]");
+    }
+
+    // Rerunning the fix must be a no-op — the score already satisfies it. Guards the
+    // add/remove rules against each other (a courtesy the remove pass considers
+    // superfluous would show up here as endless churn).
+    function caseCourtesyAccidentalsIdempotent(r) {
+        var res = Effects.fixCourtesyAccidentals(effectCtx(), { bracket: 1 });
+        H.check(r, "courtesy: a second run changes nothing",
+                res.added === 0 && res.removed === 0 && res.skipped === 0,
+                "added=" + res.added + " removed=" + res.removed + " skipped=" + res.skipped);
     }
 
     // To Comp Slashes (direct-API slash notation) — Effects.compSlashesNotes writes
@@ -856,6 +945,11 @@ MuseScore {
         // case's own staff is independent. (The integrity scan below guards both.)
         caseFillEmptyBeatsVoice3(r);
         caseLineBreaks(r);
+        // Last: these run over the WHOLE score, so let every other fixture exist
+        // (and be asserted) first — that also makes them a sweep over everything the
+        // other cases wrote.
+        caseCourtesyAccidentals(r);
+        caseCourtesyAccidentalsIdempotent(r);
 
         checkNoCorruptBars(r);
 

@@ -20,6 +20,7 @@
  * @property {*} JazzKit    jazzkit.js  (selectStaffRange, countStaves)
  * @property {*} Slashes    slashes.js  (emptyRestRegions — pure, unit-tested)
  * @property {*} [Articulations] articulations.js (classifyChord — pure, unit-tested)
+ * @property {*} [Accidentals] accidentals.js (planStaff — pure, unit-tested)
  * @property {*} Segment    QML Segment enum
  * @property {*} Element    QML Element enum
  * @property {*} Cursor     QML Cursor enum
@@ -30,6 +31,7 @@
  * @property {*} [SymId]        QML SymId enum
  * @property {*} [BarLineType]  QML BarLineType enum
  * @property {*} [LayoutBreak]  QML LayoutBreak enum
+ * @property {*} [Accidental]   QML Accidental enum (NONE, FLAT, NATURAL, SHARP, …)
  */
 
 /**
@@ -635,6 +637,147 @@ function fixMarcatoStaccatos(ctx) {
     return total;
 }
 
+// --- Courtesy Accidentals ---------------------------------------------------
+// The musical decision (required? courtesy? superfluous?) is the pure,
+// unit-tested Accidentals.planStaff. This is the traversal (read one staff as
+// plain data, apply the plan) plus the API mutations.
+//
+// `note.accidentalType = X` routes to EditNote::changeAccidental, which
+// (verified in the MuseScore source):
+//   * NONE → removes the accidental AND re-derives the pitch from the measure's
+//     accidental state — so removing a REQUIRED accidental silently transposes
+//     the note. Every write below is therefore pitch-guarded and rolled back if
+//     the pitch moved; that is the invariant this effect must never break.
+//   * a type matching the sounding pitch → adds a USER-role accidental,
+//     displayed unconditionally (exactly what a courtesy accidental is), pitch
+//     unchanged.
+
+/** True for an unpitched percussion staff, where accidentals are meaningless. */
+function _isDrumStaff(ctx, staffIdx) {
+    var part = _partForStaff(ctx, staffIdx);
+    var inst = part && part.instrumentAtTick ? part.instrumentAtTick(0) : null;
+    return !!(inst && inst.drumset);
+}
+
+/** Append plain note data (+ the live objects, index-aligned) for one chord. */
+function _pushNoteData(notes, data, live) {
+    for (var i = 0; i < (notes ? notes.length : 0); ++i) {
+        var n = notes[i];
+        data.push({
+            pitch: n.pitch, tpc: n.tpc, tpc1: n.tpc1,
+            hasAccidental: !!n.accidental,
+            tiedBack: !!n.tieBack
+        });
+        live.push(n);
+    }
+}
+
+/**
+ * Read one staff as the measure/note data Accidentals.planStaff expects, with an
+ * index-aligned array of the live Note objects to apply the plan to. Notes of all
+ * four voices are merged in tick-then-track order (an accidental holds for the
+ * whole staff, not one voice), grace notes ahead of the chord they decorate.
+ * @param {EffectCtx} ctx  needs curScore, Segment, Element
+ * @returns {{measures:*[], live:*[]}}
+ */
+function _readStaffForAccidentals(ctx, staffIdx) {
+    var cursor = ctx.curScore.newCursor();
+    cursor.staffIdx = staffIdx;      // set track BEFORE rewind (api-gotchas)
+    cursor.voice = 0;
+
+    var measures = [], live = [];
+    for (var m = ctx.curScore.firstMeasure; m; m = m.nextMeasure) {
+        if (!m.firstSegment) continue;
+        // Voice 1 always has content, so this lands on the measure start and the
+        // cursor can report the key signature in force there.
+        cursor.rewindToTick(m.firstSegment.tick);
+        var notes = [];
+        for (var seg = m.firstSegment; seg; seg = seg.nextInMeasure) {
+            if (seg.segmentType !== ctx.Segment.ChordRest) continue;
+            for (var v = 0; v < 4; ++v) {
+                var el = seg.elementAt(staffIdx * 4 + v);
+                if (!el || el.type !== ctx.Element.CHORD) continue;
+                var graces = el.graceNotes || [];
+                for (var g = 0; g < graces.length; ++g) _pushNoteData(graces[g].notes, notes, live);
+                _pushNoteData(el.notes, notes, live);
+            }
+        }
+        measures.push({ keySig: cursor.keySignature || 0, notes: notes });
+    }
+    return { measures: measures, live: live };
+}
+
+/**
+ * Write an accidental onto a note, rolling back if it moved the pitch.
+ * @returns {boolean} true when the accidental was applied
+ */
+function _setAccidental(ctx, note, typeName, bracket) {
+    var type = ctx.Accidental[typeName];
+    if (type === undefined) return false;
+    var pitch = note.pitch;
+    note.accidentalType = type;
+    if (note.pitch !== pitch) {                     // shouldn't happen — never leave it wrong
+        try { note.accidentalType = ctx.Accidental.NONE; } catch (e) { }
+        return false;
+    }
+    if (bracket && note.accidental) {
+        try { note.accidental.accidentalBracket = bracket; } catch (e2) { }
+    }
+    return true;
+}
+
+/**
+ * Drop a superfluous accidental, restoring it if the pitch moved (which means it
+ * was load-bearing after all and our model was wrong about this note).
+ * @returns {boolean} true when the accidental was removed
+ */
+function _clearAccidental(ctx, note) {
+    var pitch = note.pitch;
+    var was = note.accidentalType;
+    note.accidentalType = ctx.Accidental.NONE;
+    if (note.pitch !== pitch) {
+        try { note.accidentalType = was; } catch (e) { }
+        return false;
+    }
+    return true;
+}
+
+/**
+ * Courtesy accidentals across the whole score: add one wherever a note class
+ * altered in the previous bar reappears un-altered, and remove any accidental
+ * that has become superfluous. Unpitched percussion staves are skipped. One
+ * startCmd/endCmd for the lot.
+ * @param {EffectCtx} ctx  needs curScore, Segment, Element, Accidental, JazzKit, Accidentals
+ * @param {{bracket?:number}} [opts]  accidentalBracket for ADDED courtesies
+ *                                    (0 none, 1 parenthesis, 2 bracket)
+ * @returns {{added:number, removed:number, skipped:number}}
+ */
+function fixCourtesyAccidentals(ctx, opts) {
+    var bracket = (opts && opts.bracket !== undefined) ? opts.bracket : 1;
+    var total = { added: 0, removed: 0, skipped: 0 };
+
+    ctx.curScore.startCmd();
+    var maxStaves = ctx.JazzKit.countStaves(ctx.curScore);
+    for (var staffIdx = 0; staffIdx < maxStaves; ++staffIdx) {
+        if (_isDrumStaff(ctx, staffIdx)) continue;
+        var read = _readStaffForAccidentals(ctx, staffIdx);
+        var plan = ctx.Accidentals.planStaff(read.measures);
+        for (var i = 0; i < plan.length; ++i) {
+            var d = plan[i];
+            var note = read.live[d.index];
+            if (!note) continue;
+            var ok = (d.action === "add")
+                ? _setAccidental(ctx, note, d.accidentalType, d.courtesy ? bracket : 0)
+                : _clearAccidental(ctx, note);
+            if (!ok) ++total.skipped;
+            else if (d.action === "add") ++total.added;
+            else ++total.removed;
+        }
+    }
+    ctx.curScore.endCmd();
+    return total;
+}
+
 // --- Format Line Breaks -----------------------------------------------------
 // The placement algorithm (which boxes get a break) is the pure, unit-tested
 // LineBreaks.computeBreaks; the .qml passes in the already-computed measures to
@@ -683,6 +826,7 @@ var effectsLib = {
     fillEmptyBeatsNotes: fillEmptyBeatsNotes,
     ticksToFraction: ticksToFraction,
     fixMarcatoStaccatos: fixMarcatoStaccatos,
+    fixCourtesyAccidentals: fixCourtesyAccidentals,
     applyLineBreaks: applyLineBreaks
 };
 

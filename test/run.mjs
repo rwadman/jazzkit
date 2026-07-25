@@ -1,9 +1,11 @@
 // Run all JazzKit unit tests: `node test/run.mjs` (or `npm test`).
+import "./accidentals.test.mjs";
 import "./articulations.test.mjs";
 import "./effects.test.mjs";
 import "./harness-lib.test.mjs";
 import "./jazzkit.test.mjs";
 import "./linebreaks.test.mjs";
+import "./require-exports.test.mjs";
 import "./slashes.test.mjs";
 import { run } from "./harness.mjs";
 

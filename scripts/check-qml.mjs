@@ -92,8 +92,21 @@ for (const m of manifests) {
     } else {
       for (const a of obj.actions) {
         if (!a.path) { problems.push(`action ${a.code || "?"}: missing \`path\``); continue; }
-        if (!existsSync(resolve(dirname(m), a.path)))
+        const p = resolve(dirname(m), a.path);
+        if (!existsSync(p)) {
           problems.push(`action ${a.code || a.path}: file not found (${a.path})`);
+          continue;
+        }
+        // A "macros" action is a .js the script engine runs by calling main() —
+        // no main(), no action (the log just says "not found function: main").
+        if (a.type === "macros") {
+          if (!/\.js$/.test(a.path))
+            problems.push(`action ${a.code || a.path}: macros path must be a .js file`);
+          else if (!/\bfunction\s+main\s*\(/.test(readFileSync(p, "utf8")))
+            problems.push(`action ${a.code || a.path}: macros file defines no main()`);
+        } else if (!/\.qml$/.test(a.path)) {
+          problems.push(`action ${a.code || a.path}: form path must be a .qml file`);
+        }
       }
     }
   }
