@@ -80,7 +80,10 @@ function captureSingleStaffRange(curScore, Cursor) {
     var cursor = curScore.newCursor();
     cursor.rewind(Cursor.SELECTION_START);
     var selStart = cursor.tick;
-    var measureTick = cursor.measure.firstSegment.tick;
+    // A range selection always sits in a measure with segments; fall back to
+    // selStart rather than throwing if a build ever reports otherwise.
+    var m = cursor.measure;
+    var measureTick = (m && m.firstSegment) ? m.firstSegment.tick : selStart;
     cursor.rewind(Cursor.SELECTION_END);
     var selEnd = cursor.tick;
     // A selection running to the end of the score reports tick 0 — treat it as "past

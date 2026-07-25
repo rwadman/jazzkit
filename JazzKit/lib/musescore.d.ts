@@ -115,6 +115,8 @@ declare namespace MS {
         segmentType: number;
         nextInMeasure: Segment | null;
         elementAt(track: number): Element | null;
+        /** Segment-attached elements (fermatas, dynamics, …) — NOT chord articulations. */
+        annotations?: any[];
     }
 
     /** A score element (chord, rest, …) as reached via a segment/cursor. */

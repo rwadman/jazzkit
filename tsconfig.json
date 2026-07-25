@@ -1,9 +1,15 @@
 {
     "//": "Type-checks the pure JS libs via JSDoc + `// @ts-check` — no build, no emit. The .js files QML loads are the files we edit. `npm run typecheck`.",
+    "//strict": "The API shapes live in lib/musescore.d.ts; `strict` is what makes a missing or wrong one an error instead of an `any` that spreads through every caller. Every lib param needs a JSDoc @param. noUncheckedIndexedAccess and exactOptionalPropertyTypes stay OFF — they fight the ES5 `var x = arr[i]` idiom without catching real bugs here.",
     "compilerOptions": {
         "allowJs": true,
         "checkJs": true,
         "noEmit": true,
+        "strict": true,
+        "noImplicitReturns": true,
+        "noFallthroughCasesInSwitch": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
         "target": "ES2017",
         "lib": [
             "ES2017"
