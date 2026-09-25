@@ -301,6 +301,30 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   **Fix: `rewindToTick(measureTick)`** (the measure start always has a target
   rest) **then write a leading rest up to `selStart`** — that positions AND splits
   the rest. See `effects.js` `_writeCueInto` / `_writeSlashRhythmInto`.
+- **`cursor.setDuration(z, n)` silently TRUNCATES a length no single note value
+  spells.** It builds `TDuration(Fraction)`, which (release build) rounds down to
+  the longest value that fits: `setDuration(5, 8)` → a half. A gap-filling rest
+  then ends early and every later write lands early. Split arbitrary spans into
+  plain values first (`effects.js` `splitRestTicks`).
+- **Tuplets: `duration` is NOMINAL.** A triplet eighth reads `duration` 1/8 (240
+  ticks); `actualDuration` is 160. Reading `duration` and writing it back with
+  `setDuration` flattens the triplet to straight eighths and shifts everything
+  after it. Re-create the tuplet with `cursor.addTuplet(fraction(3,2),
+  fraction(1,4))` (leaves the cursor on its first member, pre-filled with rests),
+  then write the members with their NOMINAL durations. `el.tuplet.actualNotes /
+  normalNotes / duration` give the ratio and span; the start tick is
+  `tuplet.elements[0].parent.tick` (`EngravingItem.fraction` is 4.6+ only).
+  `addTuplet` refuses a tuplet crossing a barline.
+- **A plugin-built chord is ZERO ticks long**, so `chord.duration = D` after
+  `cursor.add(chord)` is a *lengthen* (`Score::changeCRlen` → `makeGap`). `makeGap`
+  counts the chord's own span only from the first score segment AFTER the chord's
+  tick: if ANY staff has a segment inside the span (a drum groove's eighths), the
+  stretch up to it goes uncounted and makeGap eats the next element in the voice.
+  Fix: set `chord.duration` first to exactly that stretch, then to D (only works
+  when the stretch is one note value — see `_writeDrumCueInto`). There is no way to
+  set a detached chord's length (`durationTypeWithDots` sets only the type, not
+  the ticks; `noteType` is read-only), and `chord.remove` on a detached chord goes
+  through `deleteItem` — don't.
 - A note whose duration crosses a barline is auto-written as **tied slices** — a
   second pass that cue-sizes / applies articulations must walk by **tick**, not by
   source index (there are more target chords than source notes).
