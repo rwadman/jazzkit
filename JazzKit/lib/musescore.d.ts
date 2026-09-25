@@ -100,6 +100,10 @@ declare namespace MS {
         addNote(pitch: number, addToChord?: boolean): void;
         /** Note input: write a rest of the current input duration. */
         addRest(): void;
+        /** Replace the CR at the cursor with a tuplet of `ratio` (actual/normal
+         *  notes) spanning `duration`, filled with rests; the cursor stays on its
+         *  first member (api/v1/cursor.cpp). Both args are QML fraction() wrappers. */
+        addTuplet(ratio: any, duration: any): void;
     }
 
     interface Measure {
@@ -128,8 +132,15 @@ declare namespace MS {
     interface Element {
         /** Element.CHORD / Element.REST etc. — compared against the QML Element enum. */
         type: number;
-        /** ChordRest length as a Fraction wrapper (ticks + numerator/denominator). */
-        duration: { ticks: number; numerator: number; denominator: number };
+        /** ChordRest length as a Fraction wrapper (ticks + numerator/denominator).
+         *  NOMINAL: an eighth inside a triplet reads 1/8 (240 ticks). */
+        duration: FractionValue;
+        /** Length on the timeline, tuplet ratio applied (a triplet eighth: 160). */
+        actualDuration?: FractionValue;
+        /** The tuplet this chord/rest belongs to, or null. */
+        tuplet?: Tuplet | null;
+        /** The parent element (for a chord/rest: its Segment). */
+        parent?: any;
         /** Cue size ("Whether this element is cue size"). */
         small?: boolean;
         /** Notes of a chord (Element.CHORD). */
@@ -147,6 +158,25 @@ declare namespace MS {
         /** Attach a child element — on a Chord this is what Cursor::add does for
          *  an ARTICULATION, and how a plugin-built chord takes its note. */
         add(element: any): void;
+    }
+
+    /** A Fraction wrapper as the API returns it. */
+    interface FractionValue {
+        ticks: number;
+        numerator: number;
+        denominator: number;
+    }
+
+    /** A tuplet (DurationElement). `duration` is its total span. */
+    interface Tuplet {
+        duration: FractionValue;
+        /** Members in tick order (chords/rests, or nested tuplets). */
+        elements: Element[];
+        /** Ratio actualNotes:normalNotes (3:2 for a triplet). */
+        actualNotes: number;
+        normalNotes: number;
+        /** The enclosing tuplet, when nested. */
+        tuplet?: Tuplet | null;
     }
 
     /** A note within a chord. */

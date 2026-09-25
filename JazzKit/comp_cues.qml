@@ -36,7 +36,7 @@ MuseScore {
         // they are handed to the component (and to the effect layer) explicitly.
         ctx: ({
             curScore: curScore, newElement: newElement,
-            Element: Element, Cursor: Cursor, division: division,
+            Element: Element, Segment: Segment, Cursor: Cursor, division: division, fraction: fraction,
             Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam,
             mscoreMajorVersion: mscoreMajorVersion,
             mscoreMinorVersion: mscoreMinorVersion
