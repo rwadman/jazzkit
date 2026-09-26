@@ -50,7 +50,18 @@ class FakeCursor {
     }
     get element() { return this._i < this._segs.length ? this._segs[this._i].el : null; }
     next() { this._i++; const s = this._segs; this.tick = this._i < s.length ? s[this._i].tick : Infinity; return this._i < s.length; }
-    setDuration(z, n) { this._dur = { z, n }; }
+    // Cursor::setDuration builds a TDuration, which (release build) TRUNCATES a
+    // length no single value spells to the longest one that fits: 5/8 → 1/2.
+    setDuration(z, n) {
+        const want = z / n;
+        let best = null;
+        for (let base = 1; base <= 128; base *= 2)
+            for (let dots = 0; dots <= 3; dots++) {
+                const v = (2 - 1 / 2 ** dots) / base;   // base note with `dots` dots
+                if (v <= want + 1e-12 && (!best || v > best.v)) best = { v, z: 2 ** (dots + 1) - 1, n: base * 2 ** dots };
+            }
+        this._dur = best ? { z: best.z, n: best.n } : { z, n };
+    }
     _durTicks() { return Math.round((this._dur.z / this._dur.n) * WHOLE); }
     addRest() { this._write("rest", [], this._durTicks()); }
     addNote(pitch, addToChord) {
@@ -70,9 +81,18 @@ class FakeCursor {
         const cur = this.element; if (cur) cur.articulations.push(el);
         this.score.ops.push({ op: "accent", staff: this.staffIdx, tick: this.tick, sym: el.symbol });
     }
+    // Cursor::addTuplet: the next writes are NOMINAL durations squeezed by the
+    // ratio until the tuplet's span is used up (the real one pre-fills rests; the
+    // writes then overwrite them, so the fake just scales).
+    addTuplet(ratio, dur) {
+        const span = Math.round((dur.z / dur.n) * WHOLE);
+        this.score.ops.push({ op: "tuplet", staff: this.staffIdx, tick: this.tick, ratio: [ratio.z, ratio.n], dur: span });
+        this._tuplet = { end: this.tick + span, actual: ratio.z, normal: ratio.n };
+    }
     // Like MuseScore note input: a duration crossing a barline (multiple of WHOLE)
     // is written as several tied slices, one per measure.
     _write(kind, pitches, Dtot) {
+        if (this._tuplet) Dtot = Dtot * this._tuplet.normal / this._tuplet.actual;
         const T0 = this.tick; let start = T0, remaining = Dtot, head = null;
         while (remaining > 0) {
             const nextBar = (Math.floor(start / WHOLE) + 1) * WHOLE;
@@ -85,6 +105,7 @@ class FakeCursor {
         }
         this._lastChord = kind === "chord" ? head : null;
         this.tick = T0 + Dtot;
+        if (this._tuplet && this.tick >= this._tuplet.end) this._tuplet = null;
         const segs = this._segs; this._i = segs.findIndex((s) => s.tick === this.tick); if (this._i < 0) this._i = segs.length;
     }
     _insertSplit(T, D, el) {
@@ -108,6 +129,7 @@ const NoteHeadGroup = { HEAD_SLASH: "HEAD_SLASH", HEAD_NORMAL: "HEAD_NORMAL" };
 const Beam = { NONE: "NONE" };
 function makeCtx(score) {
     return { curScore: score, division: DIV, Element, Direction, NoteHeadGroup, Beam,
+             fraction: (z, n) => ({ z, n }),
              newElement: (type) => ({ type, symbol: undefined }) };
 }
 
@@ -299,4 +321,164 @@ test("compCuesNotes: empty selection reports an error, writes nothing", () => {
     });
     ok(res.error);
     eq(score.ops.length, 0);
+});
+
+// --- splitRestTicks / gap fill (setDuration truncates what it can't spell) ----
+
+test("splitRestTicks: a gap no single value spells becomes plain values, longest first", () => {
+    eq(Effects.splitRestTicks(1200, DIV), { chunks: [960, 240], leftover: 0 });   // 5/8
+    eq(Effects.splitRestTicks(480, DIV), { chunks: [480], leftover: 0 });
+    eq(Effects.splitRestTicks(2400, DIV), { chunks: [1920, 480], leftover: 0 });  // 5/4 bar
+    eq(Effects.splitRestTicks(0, DIV), { chunks: [], leftover: 0 });
+});
+
+test("splitRestTicks: reports what plain values can't cover", () => {
+    eq(Effects.splitRestTicks(160, DIV).leftover > 0, true);   // a triplet eighth
+});
+
+test("compCuesNotes: a 5/8 lead-in is written as rests that END exactly at selStart", () => {
+    const score = new FakeScore();
+    score.staves[0] = [{ tick: 1200, dur: 240, el: chordEl(240, [60], []) }];
+    score.staves[1] = [{ tick: 0, dur: WHOLE, el: restEl(WHOLE) }];
+    Effects.compCuesNotes(makeCtx(score), {
+        selStart: 1200, selEnd: 1440, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    const writes = score.ops.filter((o) => o.staff === 1);
+    // Before the fix: one truncated half rest (960) and the note at 960, an eighth early.
+    eq(writes.map((w) => [w.op, w.tick, w.dur]), [["rest", 0, 960], ["rest", 960, 240], ["chord", 1200, 240]]);
+});
+
+// --- tuplets ----------------------------------------------------------------
+// A source tuplet group: members at their actual ticks, each reporting its NOMINAL
+// duration (as MuseScore does) plus actualDuration and a shared tuplet whose first
+// member's parent segment carries the start tick.
+function tupletSegs(start, actual, normal, span, members) {
+    const nominalOf = (m) => m.nominal;
+    const tuplet = { actualNotes: actual, normalNotes: normal, duration: frac(span), elements: [], tuplet: null };
+    const segs = [];
+    let t = start;
+    for (const m of members) {
+        const nominal = nominalOf(m);
+        const real = nominal * normal / actual;
+        const el = m.pitches ? chordEl(nominal, m.pitches, m.accents || []) : restEl(nominal);
+        el.tuplet = tuplet;
+        el.actualDuration = { ticks: real };
+        el.parent = { tick: t };
+        tuplet.elements.push(el);
+        segs.push({ tick: t, dur: real, el });
+        t += real;
+    }
+    return segs;
+}
+// Source bar: quarter C, an eighth-triplet D E F on beat 2, a quarter G on beat 3.
+function tripletScenario() {
+    const score = new FakeScore();
+    score.staves[0] = [
+        { tick: 0, dur: 480, el: chordEl(480, [60], []) },
+        ...tupletSegs(480, 3, 2, 480, [{ nominal: 240, pitches: [62], accents: ["acc"] }, { nominal: 240, pitches: [64] }, { nominal: 240, pitches: [65] }]),
+        { tick: 960, dur: 480, el: chordEl(480, [67], []) },
+    ];
+    score.staves[1] = [{ tick: 0, dur: WHOLE, el: restEl(WHOLE) }];
+    return score;
+}
+const cueTo1 = (score, selStart, selEnd, ctx) => Effects.compCuesNotes(ctx || makeCtx(score), {
+    selStart, selEnd, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+});
+
+test("compCuesNotes: a triplet is re-created, not flattened to straight eighths", () => {
+    const score = tripletScenario();
+    const res = cueTo1(score, 0, 1440);
+    eq(res.error, "");
+    const writes = score.ops.filter((o) => o.staff === 1 && o.op !== "accent");
+    eq(writes.map((w) => [w.op, w.tick, w.dur]), [
+        ["chord", 0, 480],
+        ["tuplet", 480, 480],
+        ["chord", 480, 160], ["chord", 640, 160], ["chord", 800, 160],
+        ["chord", 960, 480],     // before the fix: 1200 — everything after the triplet drifted
+    ]);
+    eq(writes[1].ratio, [3, 2]);
+    // Markings follow the actual ticks: the accent is on the first triplet note.
+    eq(score.staves[1].find((s) => s.tick === 480).el.articulations.map((a) => a.symbol), ["acc"]);
+});
+
+test("compSlashesNotes: the triplet survives as slashes too", () => {
+    const score = tripletScenario();
+    Effects.compSlashesNotes(makeCtx(score), { selStart: 0, selEnd: 1440, measureTick: 0, srcStaffIdx: 0, targets: [1] });
+    const chords = score.staves[1].filter((s) => s.el.type === Element.CHORD);
+    eq(chords.map((c) => [c.tick, c.dur]), [[0, 480], [480, 160], [640, 160], [800, 160], [960, 480]]);
+    eq(score.ops.filter((o) => o.op === "tuplet").length, 1);
+});
+
+test("compCuesNotes: a selection starting inside a tuplet copies the whole tuplet", () => {
+    const score = tripletScenario();
+    cueTo1(score, 640, 1440);   // starts on the 2nd triplet note
+    const writes = score.ops.filter((o) => o.staff === 1 && o.op !== "accent");
+    eq(writes.map((w) => [w.op, w.tick, w.dur]), [
+        ["rest", 0, 480],       // lead-in only up to the tuplet's start
+        ["tuplet", 480, 480],
+        ["chord", 480, 160], ["chord", 640, 160], ["chord", 800, 160],
+        ["chord", 960, 480],
+    ]);
+});
+
+test("compCuesNotes: a selection ending inside a tuplet copies the whole tuplet", () => {
+    const score = tripletScenario();
+    cueTo1(score, 0, 640);      // ends after the 1st triplet note
+    const chords = score.staves[1].filter((s) => s.el.type === Element.CHORD);
+    eq(chords.map((c) => [c.tick, c.dur]), [[0, 480], [480, 160], [640, 160], [800, 160]]);
+});
+
+test("compCuesNotes: nested tuplets are refused before anything is written", () => {
+    const score = tripletScenario();
+    score.staves[0][1].el.tuplet.tuplet = { actualNotes: 3, normalNotes: 2 };
+    const res = cueTo1(score, 0, 1440);
+    ok(/Nested tuplets/.test(res.error));
+    eq(score.ops.length, 0);
+});
+
+test("compCuesNotes: tuplets without ctx.fraction are refused before anything is written", () => {
+    const score = tripletScenario();
+    const ctx = makeCtx(score);
+    delete ctx.fraction;
+    const res = cueTo1(score, 0, 1440, ctx);
+    ok(res.error);
+    eq(score.ops.length, 0);
+});
+
+test("collapseTuplets: a tuplet group becomes one CR over its span, a note if any member is", () => {
+    const tup = { start: 480, actual: 3, normal: 2, num: 1, den: 4, ticks: 480 };
+    const cr = (tick, isRest, extra) => Object.assign({ tick, num: 1, den: 8, ticks: 160, isRest, tuplet: tup,
+        pitches: isRest ? [] : [60], ties: [], accents: [], fermatas: [] }, extra);
+    const plain = { tick: 0, num: 1, den: 4, ticks: 480, isRest: false, tuplet: null, pitches: [60], ties: [], accents: [], fermatas: [] };
+    const out = Effects.collapseTuplets([plain, cr(480, true, { fermatas: ["fer"] }), cr(640, false), cr(800, true)]);
+    eq(out.length, 2);
+    eq(out[0], plain);
+    eq([out[1].tick, out[1].num, out[1].den, out[1].ticks, out[1].isRest, out[1].tuplet], [480, 1, 4, 480, false, null]);
+    eq(out[1].fermatas, ["fer"]);   // the head member's markings
+});
+
+// --- ties (planned here, made by cmd("tie") after the write — GUI-verified) ----
+
+const crAt = (tick, ticks, pitches, ties) => ({ tick, num: 1, den: 4, ticks, isRest: !pitches, tuplet: null,
+    pitches: pitches || [], ties: ties || [], accents: [], fermatas: [] });
+
+test("planTies: a tie into the next same-pitch note is carried", () => {
+    eq(Effects.planTies([crAt(0, 480, [62], [62]), crAt(480, 480, [62])], false),
+       [{ tick: 0, nextTick: 480, pitch: 62 }]);
+});
+
+test("planTies: a chord ties only the pitches that continue", () => {
+    eq(Effects.planTies([crAt(0, 480, [60, 64], [60, 64]), crAt(480, 480, [60, 65])], false),
+       [{ tick: 0, nextTick: 480, pitch: 60 }]);
+});
+
+test("planTies: nothing to land on — tie out of the range, into a rest, or across a gap", () => {
+    eq(Effects.planTies([crAt(0, 480, [62], [62])], false), []);                          // last CR
+    eq(Effects.planTies([crAt(0, 480, [62], [62]), crAt(480, 480, null)], false), []);    // rest next
+    eq(Effects.planTies([crAt(0, 480, [62], [62]), crAt(960, 480, [62])], false), []);    // not adjacent
+});
+
+test("planTies: one tie per CR for the single-note writers (slashes, drum cue)", () => {
+    eq(Effects.planTies([crAt(0, 480, [60, 64], [60, 64]), crAt(480, 480, [60, 64])], true),
+       [{ tick: 0, nextTick: 480, pitch: -1 }]);
 });

@@ -1,6 +1,6 @@
 #!/bin/bash
-# End-to-end plugin test: deploy BOTH packages (the shipping JazzKit plugin and the
-# JazzKitTest harness), open an empty score, then wait for the one-click harness run
+# End-to-end plugin test: deploy the shipping JazzKit extension plus the dev-only
+# harness action (spliced into the deployed copy), open an empty score, then wait for the one-click harness run
 # and print its report.
 #
 # There is no headless/CLI path for score-editing plugins on MS 4.7.x (see
@@ -8,8 +8,7 @@
 # script does everything around that: sync, open a blank fixture, launch, collect.
 #
 # The only manual steps while this waits:
-#   1. Plugins ▸ "zz Test Harness"
-#        (first run only: enable "JazzKit Test" in Home ▸ Plugins, then re-run.)
+#   1. Plugins ▸ JazzKit ▸ "zz Test Harness"
 #   2. Read the box, then close the score WITHOUT saving.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -92,6 +91,7 @@ restore_session() {
 kill_app() {
   if [ -n "$MS_PID" ]; then kill -9 "$MS_PID" 2>/dev/null || true; fi
   restore_session
+  "$ROOT/scripts/sync-harness.sh" --clean >/dev/null 2>&1 || true   # dev harness out of the install
 }
 
 # Tear down on any exit (success, timeout, Ctrl-C) when killing is enabled.
@@ -112,7 +112,7 @@ REPORTS=(
 )
 
 "$ROOT/scripts/sync.sh"                   # (re)deploy the shipping JazzKit package
-"$ROOT/scripts/sync-harness.sh"           # (re)deploy the JazzKitTest harness package
+"$ROOT/scripts/sync-harness.sh"           # add the harness action to the deployed JazzKit
 
 # Clear stale reports so we only print THIS run's.
 rm -f "${REPORTS[@]}"
@@ -140,18 +140,19 @@ if [ "$AUTOCLICK" = "1" ]; then
   # the controlling terminal (System Settings ▸ Privacy & Security ▸
   # Accessibility) — without it osascript errors out (-1719) and we fall through
   # to the manual instructions. The retry loop waits for the app + menu item to
-  # exist (covers launch lag). If "JazzKit Test" isn't enabled yet the item
-  # never appears and the loop times out — enable it in Home ▸ Plugins once.
+  # exist (covers launch lag). The harness is an action of the JazzKit extension,
+  # so it needs JazzKit enabled (Home ▸ Plugins, once).
   echo "Auto-clicking Plugins ▸ \"$MENU_ITEM\"..."
   osascript <<APPLESCRIPT || echo "  (auto-click failed — grant Accessibility, or click it manually)" >&2
 tell application "System Events"
   tell process "$PROC"
     set frontmost to true
+    delay 4
     repeat 60 times
-      if exists (menu item "$MENU_ITEM" of menu 1 of menu bar item "Plugins" of menu bar 1) then exit repeat
+      if exists (menu item "$MENU_ITEM" of menu 1 of menu item "JazzKit" of menu 1 of menu bar item "Plugins" of menu bar 1) then exit repeat
       delay 0.5
     end repeat
-    click menu item "$MENU_ITEM" of menu 1 of menu bar item "Plugins" of menu bar 1
+    click menu item "$MENU_ITEM" of menu 1 of menu item "JazzKit" of menu 1 of menu bar item "Plugins" of menu bar 1
   end tell
 end tell
 APPLESCRIPT
@@ -161,8 +162,7 @@ else
   cat <<'EOF'
 
 MuseScore is opening on a blank score. In it:
-  1. Plugins ▸ "zz Test Harness"
-       (first run only: enable "JazzKit Test" in Home ▸ Plugins, then re-run.)
+  1. Plugins ▸ JazzKit ▸ "zz Test Harness"
   2. Read the box, then close the score WITHOUT saving.
 
 Waiting for the harness report (Ctrl-C to stop waiting)...

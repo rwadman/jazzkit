@@ -65,7 +65,7 @@ scripts/mslog.sh
 ```
 
 Copy `.env.example` to `.env` and set the paths for your machine — `sync.sh`
-(via `EXTENSIONS_FOLDER`), `sync-harness.sh` (via `PLUGINS_FOLDER`) and
+and `sync-harness.sh` (via `EXTENSIONS_FOLDER`) and
 `start_ms.sh` (via `MUSE_SCORE_FOLDER`) read it.
 
 ## License

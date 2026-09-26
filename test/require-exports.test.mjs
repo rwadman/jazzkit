@@ -59,6 +59,7 @@ const LIBS = [
     ["lib/effects.js", ["fixMarcatoStaccatos", "fixCourtesyAccidentals", "applyLineBreaks"]],
     ["lib/slashes.js", ["emptyRestRegions", "beatTicks"]],
     ["lib/linebreaks.js", ["computeBreaks", "groupBoxes"]],
+    ["lib/rests.js", ["restDurations", "restRuns", "sameLengths"]],
 ];
 
 for (const [path, fns] of LIBS) {
@@ -102,13 +103,14 @@ test("autofix.js loads: its require()s resolve and main() is defined", () => {
     ok(typeof e.scope.Articulations.chordNames === "function", "Articulations lib wired up");
     ok(typeof e.scope.Accidentals.planStaff === "function", "Accidentals lib wired up");
     ok(typeof e.scope.Effects.fixCourtesyAccidentals === "function", "Effects lib wired up");
+    ok(typeof e.scope.Rests.restDurations === "function", "Rests lib wired up");
 
     e.scope.main();
     eq(quit, 1, "main() should quit()");
     eq(logged, ["JazzKit Autofix: no score open"]);
 });
 
-test("autofix.js runs both fixes and reports them, honouring the settings", () => {
+test("autofix.js runs every fix and reports them, honouring the settings", () => {
     const logged = [];
     const e = newEngine({
         // Only the bits loadAutofixSettings touches; the effects are stubbed below.
@@ -117,6 +119,7 @@ test("autofix.js runs both fixes and reports them, honouring the settings", () =
         console: { log: (m) => logged.push(m) },
         quit: () => { },
         newElement: () => ({}), SymId: {}, Element: {}, Cursor: {}, Segment: {}, Accidental: {},
+        division: 480, cmd: () => { }, removeElement: () => { },
     });
     e.evaluate("autofix.js");
 
@@ -126,19 +129,30 @@ test("autofix.js runs both fixes and reports them, honouring the settings", () =
     e.scope.Effects = {
         fixMarcatoStaccatos: () => ({ added: 2, hidden: 1 }),
         fixCourtesyAccidentals: (_ctx, opts) => { bracketSeen = opts.bracket; return { added: 3, removed: 1, skipped: 0 }; },
+        groupNotes: () => { order.push("notes"); return { bars: 6, skipped: 1 }; },
+        fullBarRests: (ctx) => { order.push("full"); ctxSeen = ctx; return { bars: 4 }; },
+        groupRests: () => { order.push("group"); return { regrouped: 5 }; },
     };
+    const order = [];
+    let ctxSeen = null;
     e.scope.main();
 
     eq(bracketSeen, 2, "the stored bracket style reaches the effect");
-    eq(logged.length, 2);
+    eq(logged.length, 5);
     ok(/marcato staccatos — added 2 hidden, hid 1 existing/.test(logged[0]), logged[0]);
     ok(/courtesy accidentals — added 3, removed 1 superfluous, skipped 0/.test(logged[1]), logged[1]);
+    ok(/note grouping — regrouped 6 bar\(s\), skipped 1/.test(logged[2]), logged[2]);
+    ok(/full-bar rests — 4 bar/.test(logged[3]), logged[3]);
+    ok(/rest grouping — regrouped 5 run/.test(logged[4]), logged[4]);
+    eq(order, ["notes", "full", "group"], "notes, then whole-bar rests, then rest runs");
+    ok(typeof ctxSeen.cmd === "function" && typeof ctxSeen.removeElement === "function" && ctxSeen.Rests,
+       "the rest fixes get cmd, removeElement and the Rests lib");
 });
 
 test("autofix.js with every fix disabled touches nothing", () => {
     const logged = [];
     const e = newEngine({
-        curScore: { metaTag: () => JSON.stringify({ marcato: false, courtesy: false }) },
+        curScore: { metaTag: () => JSON.stringify({ marcato: false, courtesy: false, groupRests: false, fullBarRests: false, groupNotes: false }) },
         mscoreMajorVersion: 4, mscoreMinorVersion: 7,
         console: { log: (m) => logged.push(m) },
         quit: () => { },
@@ -147,6 +161,9 @@ test("autofix.js with every fix disabled touches nothing", () => {
     e.scope.Effects = {
         fixMarcatoStaccatos: () => { throw new Error("must not run"); },
         fixCourtesyAccidentals: () => { throw new Error("must not run"); },
+        fullBarRests: () => { throw new Error("must not run"); },
+        groupNotes: () => { throw new Error("must not run"); },
+        groupRests: () => { throw new Error("must not run"); },
     };
     e.scope.main();
     eq(logged, ["JazzKit Autofix: no fixes enabled"]);

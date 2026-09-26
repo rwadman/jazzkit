@@ -239,14 +239,23 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   the root's `Component.onCompleted` works; `implicitHeight: <expression>` on the
   `MuseScore{}` root lost the button row entirely in the same form. Verified the
   hard way, twice.
-- **A form CANNOT dispatch notation `cmd()`s** — same focus trap as the old
-  `pluginType:"dialog"`. The host `ExtensionViewer` (a `StyledDialogView`) holds
-  focus, so `paste`/`slash-rhythm`/`voice-3`/`slash-fill` log
-  `no one can handle the action` (context-free `copy` still runs — misleading).
-  Verified via the harness log. ⇒ **effects invoked from a form must be
-  direct-API only** (cursor note-input + element properties), never `cmd()`.
-  Anything that genuinely needs `cmd()` must be a **`macros`** action (menu-
-  dispatched, notation focused — `cmd()` works there, as `colornotes` shows).
+- **A form can't dispatch notation `cmd()`s WHILE ITS WINDOW IS OPEN, but can after
+  `quit()`.** Most notation actions are gated on `isNotationPage()` →
+  `UiContextResolver` (4.7.x source, `src/context/internal/uicontextresolver.cpp`):
+  an open plugin window makes the context "dialog" and the dispatcher logs `no one
+  can handle the action: <code>`. Verified in the GUI on 4.7.5 with a probe form:
+  `cmd("tie")` at 1.5 s → refused; `quit()` then `cmd("tie")` → works,
+  synchronously, and the form's JS keeps running afterwards (`Qt.callLater` and a
+  300 ms `Timer` after `quit()` both still fired and dispatched). Traps:
+  - In the first tick after the form opens the window isn't yet the current dialog,
+    so a `cmd()` there works (misleading). A `quit()` there is LOST: the window still
+    opens. Quit only once the window is up (a user click, or ≥ ~1.5 s).
+  - A LEGACY plugin (`onRun`) counts as a dialog for its whole run: `cmd("tie")`
+    is refused there, while `pitch-up` works (it has a different gate). This is
+    probably where the old "forms can't cmd()" note came from.
+  - So: do the direct-API work, `quit()`, then run the `cmd()`s. JazzKit's comp
+    forms do exactly this for ties (`CompTargetsForm.apply` → `Effects.applyTies`),
+    and the harness quits itself before running its cases.
 
 ## `macros` actions — the way to run WITHOUT opening a window
 
@@ -280,8 +289,8 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
 - **No dialog API in v1 macros** — `console.log` (→ the MuseScore log) is the only
   feedback channel. That's a feature for a silent action, and the reason anything
   needing options keeps a separate `form` action for its settings.
-- Menu-dispatched macros are notation-focused, so `cmd()` DOES work there (unlike
-  in a form).
+- Menu-dispatched macros have no window, so `cmd()` works there without the
+  `quit()` dance a form needs.
 
 ## Direct-API effects (cursor writing, slashes, drums)
 
@@ -301,6 +310,38 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   **Fix: `rewindToTick(measureTick)`** (the measure start always has a target
   rest) **then write a leading rest up to `selStart`** — that positions AND splits
   the rest. See `effects.js` `_writeCueInto` / `_writeSlashRhythmInto`.
+- **`cursor.setDuration(z, n)` silently TRUNCATES a length no single note value
+  spells.** It builds `TDuration(Fraction)`, which (release build) rounds down to
+  the longest value that fits: `setDuration(5, 8)` → a half. A gap-filling rest
+  then ends early and every later write lands early. Split arbitrary spans into
+  plain values first (`effects.js` `splitRestTicks`).
+- **Tuplets: `duration` is NOMINAL.** A triplet eighth reads `duration` 1/8 (240
+  ticks); `actualDuration` is 160. Reading `duration` and writing it back with
+  `setDuration` flattens the triplet to straight eighths and shifts everything
+  after it. Re-create the tuplet with `cursor.addTuplet(fraction(3,2),
+  fraction(1,4))` (leaves the cursor on its first member, pre-filled with rests),
+  then write the members with their NOMINAL durations. `el.tuplet.actualNotes /
+  normalNotes / duration` give the ratio and span; the start tick is
+  `tuplet.elements[0].parent.tick` (`EngravingItem.fraction` is 4.6+ only).
+  `addTuplet` refuses a tuplet crossing a barline.
+- **Ties can't be built through the API.** A Tie element needs its end note, which
+  nothing exposes: `note.add(newElement(Element.TIE))` reaches `undoAddElement`,
+  which dereferences the missing start/end notes (crash). Use `cmd("tie")`: with
+  several notes selected (`selection.select(n, true)`), ONE `cmd("tie")` ties each
+  to its next same-pitch note in a single undo step. It toggles a selected note
+  that is already tied OFF, and a note with no next same-pitch note may be tied to
+  a later selected note or grow a new note, so select only notes whose next note
+  provably continues the tie (`effects.js` `applyTies`).
+- **A plugin-built chord is ZERO ticks long**, so `chord.duration = D` after
+  `cursor.add(chord)` is a *lengthen* (`Score::changeCRlen` → `makeGap`). `makeGap`
+  counts the chord's own span only from the first score segment AFTER the chord's
+  tick: if ANY staff has a segment inside the span (a drum groove's eighths), the
+  stretch up to it goes uncounted and makeGap eats the next element in the voice.
+  Fix: set `chord.duration` first to exactly that stretch, then to D (only works
+  when the stretch is one note value — see `_writeDrumCueInto`). There is no way to
+  set a detached chord's length (`durationTypeWithDots` sets only the type, not
+  the ticks; `noteType` is read-only), and `chord.remove` on a detached chord goes
+  through `deleteItem` — don't.
 - A note whose duration crosses a barline is auto-written as **tied slices** — a
   second pass that cue-sizes / applies articulations must walk by **tick**, not by
   source index (there are more target chords than source notes).
@@ -338,6 +379,39 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   macro (form focus trap) — the `cursor.add` path needs no `cmd()`. Melody pitches
   still can't be shown on a drum staff (dropped) — the cue is rhythm on a fixed
   carrier pitch (any valid drum pitch; voice is now set explicitly).
+
+## Rests (grouping, full-measure rests)
+
+- **MuseScore's own rest grouping = `Score::setRests` → `toRhythmicDurationList`**
+  (rests: maxDots 1; a whole bar → a full-measure rest). A range `cmd("delete")`
+  refills with it, but it ALSO deletes every annotation in the range, chord symbols
+  included (`deleteAnnotationsFromRange`, and plugins can't set the selection
+  filter). JazzKit ports the function (`lib/rests.js`) and rewrites rest runs with
+  cursor note input, which keeps time-anchored text (chord symbols, staff text,
+  dynamics: `TextBase::allowTimeAnchor`) but deletes fermatas and slurs inside the
+  rewritten span (`makeGap`, 4.7.3).
+- **A full-measure rest can't be made through the API.** Note input never writes
+  one, and `durationTypeWithDots` is readable (`{type, dots}`) but its write is
+  `NOT_SUPPORTED` (`PropertyValue::fromQVariant`). Use `cmd("full-measure-rest")`
+  (`Score::cmdFullMeasureRest`) with the bar's FIRST rest selected: it replaces
+  that one voice's rests in that bar. Its range path needs the selection to end on
+  a barline segment, and a plugin `selectRange` always ends on a chord/rest segment,
+  so there it silently does nothing. It removes tuplet members without their
+  tuplet, so skip bars with tuplets. `el.isFullMeasureRest` reads the result.
+- **Regroup rhythms = `cmd("reset-groupings")`** (`Score::regroupNotesAndRests`,
+  note path of the same `toRhythmicDurationList`, maxDots 1, more lenient than
+  rests). With nothing selected it does the whole score. It rewrites EVERY rest run
+  and tie chain in range (cloning the first chord), so it also deletes fermatas and
+  slurs inside each rewritten span and drops articulations/lyrics from all but the
+  first chord of a chain. JazzKit runs it per staff and bar, only where its port
+  predicts a change and nothing would be lost (`effects.js` `groupNotes`). A plugin
+  `selectRange(barStart, nextBarStart, s, s+1)` selects exactly that bar; an end
+  tick at the score's end resolves to "no segment" = to the end.
+- `removeElement(rest)` refuses voice-1 rests; voice 2-4 rests become gaps and are
+  deleted once only gaps remain in the bar (`Score::deleteItem`).
+- **Set a Harmony's `text` AFTER `cursor.add(h)`.** Setting it on a detached
+  `newElement(Element.HARMONY)` crashes in `Harmony::setProperty` (verified crash
+  dump).
 
 ## Accidentals (`note.accidentalType` can silently RETUNE the note)
 

@@ -10,12 +10,15 @@ import "lib/articulations.js" as Articulations
 import "lib/accidentals.js" as Accidentals
 import "lib/linebreaks.js" as LineBreaks
 import "lib/effects.js" as Effects
+import "lib/rests.js" as Rests
 import "lib/harness.js" as H
 import "."          // InfoDialog.qml — dev-only, lives beside this file
 
-// SEMI-AUTOMATED TEST HARNESS — a DEV tool, deployed as its own MuseScore package
-// (JazzKitTest, via scripts/sync-harness.sh) so it never ships in the JazzKit
-// install. There is no headless way to run a MuseScore plugin (no CLI runner) and
+// SEMI-AUTOMATED TEST HARNESS — a DEV tool. scripts/sync-harness.sh splices it into
+// the DEV-deployed JazzKit extension as an extra form action ("zz Test Harness"); the
+// repo's JazzKit/ never lists it, so it never ships. It is a FORM, like the shipping
+// actions, so it runs in the same UI context they do — which matters: cmd("tie")
+// runs from an extension form but NOT from a legacy plugin (see api-gotchas). There is no headless way to run a MuseScore plugin (no CLI runner) and
 // no plugin-side undo, so the model is: open a BLANK score, run this once.
 //
 // It refuses to run unless the open score has no notes, then drives EVERY JazzKit
@@ -27,25 +30,28 @@ import "."          // InfoDialog.qml — dev-only, lives beside this file
 // removed at the end (self-cleaning); still, close WITHOUT saving.
 //
 // Run: File ▸ New (any empty score — the harness adds its own instruments, drum
-// staff included), then Plugins ▸ "zz Test Harness".
+// staff included), then Plugins ▸ JazzKit ▸ "zz Test Harness".
 MuseScore {
-    version: "0.3"
-    title: "zz Test Harness"
-    menuPath: "Plugins.zz Test Harness"
-    description: "Dev harness: builds fixtures, drives every JazzKit effect, asserts results, self-cleans."
-    requiresScore: true
+    implicitWidth: 320
+    implicitHeight: 80
 
     InfoDialog { id: infoDialog }
     FileIO { id: reportFile }
 
-    // After appending the drum staff we return from onRun so the event loop drains
+    // After appending the drum staff we return from start() so the event loop drains
     // (the mixer processes the new track while idle); this fires afterward to run the
     // cases. One-shot; interval just needs to exceed the queued mixer/layout work.
     Timer {
         id: settleTimer
-        interval: 800
+        interval: 1500
         repeat: false
-        onTriggered: runCases()
+        // Close this form's window before any case runs: MuseScore refuses notation
+        // cmd()s like "tie" while a plugin window is open, and the shipping comp
+        // forms likewise quit() before their tie pass. Not from start(): at that
+        // point the window isn't yet the current dialog, the close is lost and it
+        // opens anyway. The JS keeps running after quit() (the report goes to a
+        // file; the InfoDialog may not show once closed).
+        onTriggered: { quit(); runCases(); }
     }
 
     // Single-staff pitched instruments for fixtures. appendPitched() rotates through
@@ -74,9 +80,23 @@ MuseScore {
             JazzKit: JazzKit, Slashes: Slashes, Articulations: Articulations,
             Accidentals: Accidentals, Accidental: Accidental,
             Segment: Segment, Element: Element, Cursor: Cursor,
-            SymId: SymId, LayoutBreak: LayoutBreak, division: division,
-            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam
+            SymId: SymId, LayoutBreak: LayoutBreak, division: division, fraction: fraction,
+            Rests: Rests, removeElement: removeElement,
+            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam, cmd: cmd
         };
+    }
+
+    // The comp effects as the shipping forms run them: the effect, then its ties via
+    // Effects.applyTies (which needs this window CLOSED — start() quits first).
+    function cues(args) {
+        var res = Effects.compCuesNotes(effectCtx(), args);
+        if (!res.error) Effects.applyTies(effectCtx(), res.ties || [], args);
+        return res;
+    }
+    function slashes(args) {
+        var res = Effects.compSlashesNotes(effectCtx(), args);
+        if (!res.error) Effects.applyTies(effectCtx(), res.ties || [], args);
+        return res;
     }
 
     // ---- read-only fixture probing ------------------------------------------
@@ -369,6 +389,31 @@ MuseScore {
         return { measureTick: m.firstSegment.tick, selStart: m.firstSegment.tick, selEnd: end };
     }
 
+    // Write one bar into voice 1 of staffIdx at barTick: quarter C, an eighth
+    // TRIPLET D-E-F on beat 2, quarters G and A on beats 3-4 — the tuplet source
+    // every tuplet case copies. Rewinds to the BAR start (a mid-bar rewind on an
+    // empty staff skips forward — api-gotchas).
+    function writeTripletBar(staffIdx, barTick) {
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = staffIdx; c.voice = 0; c.rewindToTick(barTick);
+        c.setDuration(1, 4); c.addNote(60);
+        c.addTuplet(fraction(3, 2), fraction(1, 4));
+        c.setDuration(1, 8); c.addNote(62);
+        c.setDuration(1, 8); c.addNote(64);
+        c.setDuration(1, 8); c.addNote(65);
+        c.setDuration(1, 4); c.addNote(67);
+        c.setDuration(1, 4); c.addNote(69);
+        curScore.endCmd();
+    }
+
+    // The measure starting at bar `n` (1-based), or null.
+    function measureN(n) {
+        var m = curScore.firstMeasure;
+        for (var i = 1; m && i < n; ++i) m = m.nextMeasure;
+        return m;
+    }
+
     // Shared prelude of every drum-cue case: reuse the score's drum staff, append a
     // pitched source staff and make sure `bars` measures exist. Returns {drum, src},
     // or null — in which case the skip/failure has ALREADY been recorded under the
@@ -386,7 +431,7 @@ MuseScore {
     // succeeded; the caller asserts what landed. `p` is {drum, src, selStart, selEnd,
     // measureTick}. Returns the effect's result.
     function runDrumCue(r, label, p) {
-        var res = Effects.compCuesNotes(effectCtx(), {
+        var res = cues({
             selStart: p.selStart, selEnd: p.selEnd, measureTick: p.measureTick, srcStaffIdx: p.src,
             targets: [{ staffIdx: p.drum, isDrum: true }]
         });
@@ -643,7 +688,7 @@ MuseScore {
         // Beat 2 carries a staccato + a fermata: the comp must reproduce both.
         markSource(src, selStart, SymId.articStaccatoAbove, SymId.fermataAbove);
 
-        var res = Effects.compSlashesNotes(effectCtx(), {
+        var res = slashes({
             selStart: selStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src, targets: [tgt]
         });
         H.check(r, "compSlashesNotes: no error", res.error === "", res.error || "ok");
@@ -686,7 +731,7 @@ MuseScore {
         var selStart = barStart + 480;   // mid-bar (the reported failing case)
         var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
 
-        var res = Effects.compSlashesNotes(effectCtx(), {
+        var res = slashes({
             selStart: selStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src, targets: [drum]
         });
         H.check(r, "compSlashesNotes drum: no error", res.error === "", res.error || "ok");
@@ -714,7 +759,7 @@ MuseScore {
         var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
         markSource(src, selStart, SymId.articTenutoAbove, SymId.fermataAbove);
 
-        var res = Effects.compCuesNotes(effectCtx(), {
+        var res = cues({
             selStart: selStart, selEnd: selEnd, measureTick: barStart, srcStaffIdx: src,
             targets: [{ staffIdx: tgt, isDrum: false }]
         });
@@ -906,6 +951,526 @@ MuseScore {
         }
     }
 
+    // To Comp Cues over a TRIPLET — regression for "the plugins that copy notation
+    // can't handle tuplets": the reader took each member's NOMINAL duration (240 for
+    // a triplet eighth) and never re-created the tuplet, so the triplet became three
+    // straight eighths and everything after it landed an eighth late. The selection
+    // starts on the 2nd triplet note, so it also covers widening to the whole tuplet.
+    function caseCompCuesNotesTuplet(r) {
+        var src = appendPitched();
+        var tgt = appendPitched();
+        if (src < 0 || tgt < 0) { H.check(r, "cue tuplet: fixture staves", false, "append failed"); return; }
+        ensureMeasures(1);
+        var m = curScore.firstMeasure;
+        var bar = m.firstSegment.tick;
+        writeTripletBar(src, bar);
+        var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        var res = cues({
+            selStart: bar + 640, selEnd: selEnd, measureTick: bar, srcStaffIdx: src,
+            targets: [{ staffIdx: tgt, isDrum: false }]
+        });
+        H.check(r, "cue tuplet: no error", res.error === "", res.error || "ok");
+        var shape = dumpVoiceN(tgt, 0, bar, selEnd);
+        var t1 = chordAt(tgt, bar + 480);
+        H.check(r, "cue tuplet: widened to the tuplet start (D at beat 2)", t1 && t1.notes[0].pitch === 62,
+                t1 ? "pitch=" + t1.notes[0].pitch : "no chord at beat 2 | " + shape);
+        H.check(r, "cue tuplet: written as a real 3:2 tuplet", t1 && t1.tuplet && t1.tuplet.actualNotes === 3
+                && t1.tuplet.normalNotes === 2, t1 ? "tuplet=" + (t1.tuplet ? t1.tuplet.actualNotes + ":" + t1.tuplet.normalNotes : "none") : shape);
+        var t3 = chordAt(tgt, bar + 800);
+        H.check(r, "cue tuplet: 3rd triplet note at its actual tick", t3 && t3.notes[0].pitch === 65,
+                t3 ? "pitch=" + t3.notes[0].pitch : "missing | " + shape);
+        var g = chordAt(tgt, bar + 960);
+        H.check(r, "cue tuplet: the note after the tuplet is not shifted", g && g.notes[0].pitch === 67,
+                g ? "pitch=" + g.notes[0].pitch : "no chord on beat 3 | " + shape);
+        H.check(r, "cue tuplet: nothing before the tuplet", chordCount(bar, bar + 480, tgt * 4) === 0, shape);
+    }
+
+    // To Comp Slashes over the same triplet bar (whole bar): 6 slashes, the triplet
+    // kept as a tuplet, beat 3 on time.
+    function caseCompSlashesNotesTuplet(r) {
+        var src = appendPitched();
+        var tgt = appendPitched();
+        if (src < 0 || tgt < 0) { H.check(r, "slash tuplet: fixture staves", false, "append failed"); return; }
+        ensureMeasures(1);
+        var m = curScore.firstMeasure;
+        var bar = m.firstSegment.tick;
+        writeTripletBar(src, bar);
+        var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        var res = slashes({
+            selStart: bar, selEnd: selEnd, measureTick: bar, srcStaffIdx: src, targets: [tgt]
+        });
+        H.check(r, "slash tuplet: no error", res.error === "", res.error || "ok");
+        var shape = dumpVoiceN(tgt, 0, bar, selEnd);
+        H.check(r, "slash tuplet: 6 slashes", chordCount(bar, selEnd, tgt * 4) === 6, shape);
+        var t2 = chordAt(tgt, bar + 640);
+        H.check(r, "slash tuplet: triplet slash is inside a tuplet", t2 && t2.tuplet && t2.tuplet.actualNotes === 3, shape);
+        H.check(r, "slash tuplet: beat 3 on time", chordAt(tgt, bar + 960) !== null, shape);
+    }
+
+    // To Comp Cues with a lead-in no single rest spells — regression for the gap
+    // rest: cursor.setDuration TRUNCATES 5/8 to a half, so the cue landed an eighth
+    // early. Source: eighths; selection from the 6th eighth (5/8 into the bar).
+    function caseCompCuesNotesOddLeadIn(r) {
+        var src = appendPitched();
+        var tgt = appendPitched();
+        if (src < 0 || tgt < 0) { H.check(r, "cue 5/8 lead-in: fixture staves", false, "append failed"); return; }
+        ensureMeasures(1);
+        var m = curScore.firstMeasure;
+        var bar = m.firstSegment.tick;
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = src; c.voice = 0; c.rewindToTick(bar);
+        for (var i = 0; i < 8; ++i) { c.setDuration(1, 8); c.addNote(60 + i); }
+        curScore.endCmd();
+        var selStart = bar + 1200;
+        var selEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        var res = cues({
+            selStart: selStart, selEnd: selEnd, measureTick: bar, srcStaffIdx: src,
+            targets: [{ staffIdx: tgt, isDrum: false }]
+        });
+        H.check(r, "cue 5/8 lead-in: no error", res.error === "", res.error || "ok");
+        var shape = dumpVoiceN(tgt, 0, bar, selEnd);
+        H.check(r, "cue 5/8 lead-in: nothing before selStart", chordCount(bar, selStart, tgt * 4) === 0, shape);
+        var ch = chordAt(tgt, selStart);
+        H.check(r, "cue 5/8 lead-in: 6th eighth lands exactly at selStart", ch && ch.notes[0].pitch === 65,
+                ch ? "pitch=" + ch.notes[0].pitch : "no chord at selStart | " + shape);
+    }
+
+    // Drum comp cue over a TRIPLET (bar 5). A cue chord can't be placed inside a
+    // tuplet, nor sized across the source's triplet segments, so the triplet beat is
+    // left a 480-tick REST; the bar must stay aligned (beat 3 on time) and tile
+    // (integrity scan). Before the sizing fix the chord's zero-length lengthen ate
+    // the beat-3 slot and left a 1-tick gap.
+    function caseCompCuesNotesDrumTuplet(r) {
+        var fx = drumCueFixture(r, "drum cue tuplet", "drum cue tuplet: source staff", 5);
+        if (!fx) return;
+        var m5 = measureN(5);
+        var bar5 = m5.firstSegment.tick;
+        writeTripletBar(fx.src, bar5);
+        var selEnd = m5.nextMeasure ? m5.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        runDrumCue(r, "drum cue tuplet", { drum: fx.drum, src: fx.src, selStart: bar5, selEnd: selEnd, measureTick: bar5 });
+        var voice = 2;
+        var shape = dumpVoiceN(fx.drum, voice, bar5, selEnd);
+        H.check(r, "drum cue tuplet: 3 cue notes around the triplet", chordCount(bar5, selEnd, fx.drum * 4 + voice) === 3, shape);
+        var seg = segmentAt(bar5 + 480);
+        var t = seg ? seg.elementAt(fx.drum * 4 + voice) : null;
+        H.check(r, "drum cue tuplet: the triplet beat is one quarter rest", t && t.type === Element.REST
+                && t.duration.ticks === 480, shape);
+        H.check(r, "drum cue tuplet: beat 3 on time", chordAtVoice(fx.drum, voice, bar5 + 960) !== null, shape);
+    }
+
+    // Drum comp cue over a drum GROOVE (bar 8): eighths in the drum staff's own
+    // voice 1 put a score segment inside every quarter cue note. Regression: the
+    // cue chord's zero-length lengthen (changeCRlen → makeGap) didn't count the
+    // stretch up to that segment and ate the next cue slot. All 4 quarters must
+    // survive as clean 480t chords, and the groove must be untouched.
+    function caseCompCuesNotesDrumOverGroove(r) {
+        var fx = drumCueFixture(r, "drum cue over groove", "drum cue over groove: source staff", 8);
+        if (!fx) return;
+        var m8 = measureN(8);
+        var bar8 = m8.firstSegment.tick;
+        var selEnd = m8.nextMeasure ? m8.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        // A voice-1 drum pitch for the groove (note input forces the voice by pitch).
+        var part = null;
+        for (var i = 0; i < curScore.parts.length; ++i)
+            if (Math.floor(curScore.parts[i].startTrack / 4) === fx.drum) part = curScore.parts[i];
+        var ds = part ? part.instrumentAtTick(0).drumset : null;
+        var gp = -1;
+        for (var p = 0; ds && p < 128 && gp < 0; ++p) if (ds.isValid(p) && ds.voice(p) === 0) gp = p;
+        if (gp < 0) { H.skip(r, "drum cue over groove", "no voice-1 drum pitch"); return; }
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = fx.drum; c.voice = 0; c.rewindToTick(bar8);
+        for (var k = 0; k < 8; ++k) { c.setDuration(1, 8); c.addNote(gp); }
+        c.staffIdx = fx.src; c.voice = 0; c.rewindToTick(bar8);
+        for (var q = 0; q < 4; ++q) { c.setDuration(1, 4); c.addNote(60 + q); }
+        curScore.endCmd();
+        var grooveBefore = dumpVoiceN(fx.drum, 0, bar8, selEnd);
+
+        runDrumCue(r, "drum cue over groove", { drum: fx.drum, src: fx.src, selStart: bar8, selEnd: selEnd, measureTick: bar8 });
+        var voice = 2;
+        var shape = dumpVoiceN(fx.drum, voice, bar8, selEnd);
+        H.check(r, "drum cue over groove: 4 cue notes", chordCount(bar8, selEnd, fx.drum * 4 + voice) === 4, shape);
+        var clean = true;
+        for (var b = 0; b < 4; ++b) {
+            var ch = chordAtVoice(fx.drum, voice, bar8 + b * 480);
+            if (!ch || ch.duration.ticks !== 480) clean = false;
+        }
+        H.check(r, "drum cue over groove: every cue is a clean 480t quarter", clean, shape);
+        H.check(r, "drum cue over groove: groove untouched", dumpVoiceN(fx.drum, 0, bar8, selEnd) === grooveBefore,
+                "before [" + grooveBefore + "] after [" + dumpVoiceN(fx.drum, 0, bar8, selEnd) + "]");
+    }
+
+    // Drum comp cue over TWO bars ending mid-bar (bar 6 through bar 7 beat 2) —
+    // regression: the trailing pad filled only the FIRST measure, so bar 7's voice 3
+    // was left with a gap after beat 2, the gap later cursor.add/changeCRlen reflow
+    // into (see caseCompCuesNotesDrumQuartersPartial).
+    function caseCompCuesNotesDrumMultiBar(r) {
+        var fx = drumCueFixture(r, "drum cue multi-bar", "drum cue multi-bar: source staff", 7);
+        if (!fx) return;
+        var bar6 = measureN(6).firstSegment.tick;
+        var m7 = measureN(7);
+        var bar7 = m7.firstSegment.tick;
+        var bar7End = m7.nextMeasure ? m7.nextMeasure.firstSegment.tick : curScore.lastSegment.tick;
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = fx.src; c.voice = 0; c.rewindToTick(bar6);
+        for (var i = 0; i < 8; ++i) { c.setDuration(1, 4); c.addNote(60 + i); }
+        curScore.endCmd();
+        runDrumCue(r, "drum cue multi-bar", { drum: fx.drum, src: fx.src, selStart: bar6, selEnd: bar7 + 960, measureTick: bar6 });
+        var voice = 2;
+        var shape = dumpVoiceN(fx.drum, voice, bar7, bar7End);
+        H.check(r, "drum cue multi-bar: 6 cue notes", chordCount(bar6, bar7End, fx.drum * 4 + voice) === 6,
+                "chords=" + chordCount(bar6, bar7End, fx.drum * 4 + voice) + " | bar7: " + shape);
+        // Bar 7's voice 3 must run to the barline (a rest after beat 2), not stop at beat 3.
+        var seg = segmentAt(bar7 + 960);
+        var tail = seg ? seg.elementAt(fx.drum * 4 + voice) : null;
+        H.check(r, "drum cue multi-bar: last bar padded to the barline", tail && tail.type === Element.REST
+                && tail.duration.ticks === bar7End - bar7 - 960, "bar7: " + shape);
+    }
+
+    // Fill Empty Beats past a tuplet of RESTS — regression: rests were measured by
+    // their NOMINAL length, so a triplet-rest group mis-coalesced with its
+    // neighbours and the empty beat 1 before it was never filled. Tuplet rests
+    // themselves must be left alone (a beat slash can't go inside a tuplet).
+    function caseFillEmptyBeatsTupletRests(r) {
+        var staffIdx = appendPitched();
+        if (staffIdx < 0) { H.check(r, "fill tuplet rests: fixture staff", false, "append failed"); return; }
+        ensureMeasures(1);
+        var m = curScore.firstMeasure;
+        var bar = m.firstSegment.tick;
+        var barEnd = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = staffIdx; c.voice = 0; c.rewindToTick(bar);
+        c.setDuration(1, 4); c.addRest();                       // beat 1
+        c.addTuplet(fraction(3, 2), fraction(1, 4));            // beat 2: triplet of rests
+        curScore.endCmd();
+        var res = Effects.fillEmptyBeatsNotes(effectCtx(), bar, barEnd, staffIdx);
+        var shape = dumpVoiceN(staffIdx, 0, bar, barEnd);
+        H.check(r, "fill tuplet rests: beat 1 filled", chordAt(staffIdx, bar) !== null, shape);
+        H.check(r, "fill tuplet rests: beats 3-4 filled", chordAt(staffIdx, bar + 960) !== null
+                && chordAt(staffIdx, bar + 1440) !== null, shape);
+        var seg = segmentAt(bar + 640);
+        var mid = seg ? seg.elementAt(staffIdx * 4) : null;
+        H.check(r, "fill tuplet rests: the tuplet is left as rests", mid && mid.type === Element.REST && mid.tuplet,
+                "regions=" + res.regions + " | " + shape);
+    }
+
+    // Source for the tie cases, in voice 1 of staffIdx from barTick: quarters C, D,
+    // D, E | E, then rests — D tied to D inside the bar, E tied ACROSS the barline.
+    // The ties are made with cmd("tie") (a legacy plugin can dispatch it).
+    function writeTiedSource(staffIdx, barTick) {
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = staffIdx; c.voice = 0; c.rewindToTick(barTick);
+        var pitches = [60, 62, 62, 64, 64];
+        for (var i = 0; i < pitches.length; ++i) { c.setDuration(1, 4); c.addNote(pitches[i]); }
+        curScore.endCmd();
+        curScore.selection.clear();
+        curScore.selection.select(chordAt(staffIdx, barTick + 480).notes[0]);
+        curScore.selection.select(chordAt(staffIdx, barTick + 1440).notes[0], true);
+        cmd("tie");
+    }
+    function tiedAt(staffIdx, voice, tick) {
+        var ch = chordAtVoice(staffIdx, voice, tick);
+        return !!(ch && ch.notes[0].tieForward);
+    }
+
+    // To Comp Cues / Slashes carry TIES — regression for "ties aren't handled":
+    // the copy wrote every tied slice as a fresh attack. Ties are re-made after the
+    // write with cmd("tie"). Checks the in-bar tie, the cross-barline tie, that
+    // untied notes stay untied, and that no extra notes were created.
+    function caseCompTies(r) {
+        var src = appendPitched(), cue = appendPitched(), sl = appendPitched();
+        if (src < 0 || cue < 0 || sl < 0) { H.check(r, "ties: fixture staves", false, "append failed"); return; }
+        ensureMeasures(2);
+        var bar = curScore.firstMeasure.firstSegment.tick;
+        writeTiedSource(src, bar);
+        H.check(r, "ties: fixture has both ties", tiedAt(src, 0, bar + 480) && tiedAt(src, 0, bar + 1440),
+                dumpVoice(src, bar, bar + 2400));
+        var p = { selStart: bar, selEnd: bar + 2400, measureTick: bar, srcStaffIdx: src };
+        var r1 = cues({ selStart: p.selStart, selEnd: p.selEnd, measureTick: bar,
+            srcStaffIdx: src, targets: [{ staffIdx: cue, isDrum: false }] });
+        var r2 = slashes({ selStart: p.selStart, selEnd: p.selEnd, measureTick: bar,
+            srcStaffIdx: src, targets: [sl] });
+        H.check(r, "ties: no errors", r1.error === "" && r2.error === "", r1.error + r2.error || "ok");
+        var shape = dumpVoiceN(cue, 0, bar, bar + 3840);
+        H.check(r, "ties: cue D tied to D (in-bar)", tiedAt(cue, 0, bar + 480), shape);
+        H.check(r, "ties: cue E tied across the barline", tiedAt(cue, 0, bar + 1440), shape);
+        H.check(r, "ties: untied cue notes stay untied", !tiedAt(cue, 0, bar) && !tiedAt(cue, 0, bar + 960), shape);
+        H.check(r, "ties: no extra cue notes", chordCount(bar, bar + 3840, cue * 4) === 5, shape);
+        var sshape = dumpVoiceN(sl, 0, bar, bar + 3840);
+        H.check(r, "ties: slashes tied like the source", tiedAt(sl, 0, bar + 480) && tiedAt(sl, 0, bar + 1440)
+                && !tiedAt(sl, 0, bar) && !tiedAt(sl, 0, bar + 960), sshape);
+        H.check(r, "ties: no extra slashes", chordCount(bar, bar + 3840, sl * 4) === 5, sshape);
+        var sel = curScore.selection;
+        H.check(r, "ties: source range re-selected afterwards", sel.isRange && sel.startStaff === src,
+                "isRange=" + sel.isRange + " startStaff=" + sel.startStaff);
+    }
+
+    // A tie whose END lies outside the selection has nothing to land on: it must be
+    // dropped, and cmd("tie") must NOT be handed that note (it would add a new note
+    // to tie to). Selection = bar 1 only; the E→E tie crosses into bar 2.
+    function caseCompTiesOutOfRange(r) {
+        var src = appendPitched(), cue = appendPitched();
+        if (src < 0 || cue < 0) { H.check(r, "ties out of range: fixture staves", false, "append failed"); return; }
+        ensureMeasures(2);
+        var m = curScore.firstMeasure;
+        var bar = m.firstSegment.tick, bar2 = m.nextMeasure.firstSegment.tick;
+        writeTiedSource(src, bar);
+        var res = cues({ selStart: bar, selEnd: bar2, measureTick: bar,
+            srcStaffIdx: src, targets: [{ staffIdx: cue, isDrum: false }] });
+        var shape = dumpVoiceN(cue, 0, bar, bar2 + 1920);
+        H.check(r, "ties out of range: no error", res.error === "", res.error || "ok");
+        H.check(r, "ties out of range: in-range tie kept", tiedAt(cue, 0, bar + 480), shape);
+        H.check(r, "ties out of range: dangling tie dropped", !tiedAt(cue, 0, bar + 1440), shape);
+        H.check(r, "ties out of range: nothing written into bar 2", chordCount(bar2, bar2 + 1920, cue * 4) === 0, shape);
+    }
+
+    // Drum comp cue carries ties too (bar 9): the voice-3 cue notes share one
+    // pitch, so a tied source note ties its cue note to the next.
+    function caseCompTiesDrum(r) {
+        var fx = drumCueFixture(r, "drum cue ties", "drum cue ties: source staff", 9);
+        if (!fx) return;
+        var m9 = measureN(9);
+        var bar9 = m9.firstSegment.tick;
+        writeTiedSource(fx.src, bar9);
+        runDrumCue(r, "drum cue ties", { drum: fx.drum, src: fx.src, selStart: bar9,
+                   selEnd: m9.nextMeasure ? m9.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1, measureTick: bar9 });
+        var shape = dumpVoiceN(fx.drum, 2, bar9, bar9 + 1920);
+        H.check(r, "drum cue ties: tied cue note", tiedAt(fx.drum, 2, bar9 + 480), shape);
+        H.check(r, "drum cue ties: untied cue note stays untied", !tiedAt(fx.drum, 2, bar9), shape);
+    }
+
+    // ---- rests (Autofix: groupRests / fullBarRests) --------------------------
+
+    // Lengths of the rests in one voice across [from, to), in order ("|"-joined), or
+    // a "chord@tick" marker where a chord interrupts.
+    function restShape(staffIdx, voice, from, to) {
+        var out = [];
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            for (var sg = m.firstSegment; sg; sg = sg.nextInMeasure) {
+                if (sg.segmentType !== Segment.ChordRest || sg.tick < from || sg.tick >= to) continue;
+                var el = sg.elementAt(staffIdx * 4 + voice);
+                if (!el) continue;
+                out.push(el.type === Element.REST ? (el.actualDuration ? el.actualDuration.ticks : el.duration.ticks)
+                                                  : "chord@" + (sg.tick - from));
+            }
+        return out.join("|");
+    }
+    // CRs of one voice in [from, to) as the elements themselves.
+    function crsIn(staffIdx, voice, from, to) {
+        var out = [];
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            for (var sg = m.firstSegment; sg; sg = sg.nextInMeasure) {
+                if (sg.segmentType !== Segment.ChordRest || sg.tick < from || sg.tick >= to) continue;
+                var el = sg.elementAt(staffIdx * 4 + voice);
+                if (el) out.push(el);
+            }
+        return out;
+    }
+    function harmonyCount(staffIdx, from, to) {
+        var n = 0;
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            for (var sg = m.firstSegment; sg; sg = sg.nextInMeasure) {
+                if (sg.tick < from || sg.tick >= to) continue;
+                var ann = sg.annotations || [];
+                for (var i = 0; i < ann.length; ++i)
+                    if (ann[i] && ann[i].type === Element.HARMONY && ann[i].track === staffIdx * 4) ++n;
+            }
+        return n;
+    }
+    function addChordSymbol(staffIdx, tick, text) {
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = staffIdx; c.voice = 0; c.rewindToTick(tick);
+        var h = newElement(Element.HARMONY);
+        c.add(h);
+        h.text = text;   // AFTER add: setting it on a detached Harmony crashes (needs a staff)
+        curScore.endCmd();
+    }
+    // Write `items` into one voice of staffIdx from barTick: a positive number is a
+    // rest of that many ticks, {note: ticks} a C of that length. Voices 2-4 are
+    // reached with the empty-voice trick (rewind on voice 1, then switch).
+    function writeVoice(staffIdx, voice, barTick, items) {
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = staffIdx; c.voice = 0; c.rewindToTick(barTick); c.voice = voice;
+        for (var i = 0; i < items.length; ++i) {
+            var it = items[i];
+            var t = typeof it === "number" ? it : it.note;
+            var f = Effects.ticksToFraction(t, division);
+            c.setDuration(f.z, f.n);
+            if (typeof it === "number") c.addRest(); else c.addNote(60);
+        }
+        curScore.endCmd();
+    }
+
+    // The rest-grouping PORT against MuseScore itself: a range delete refills with
+    // Score::setRests, the very code Rests.restDurations ports. For each time
+    // signature, fresh bars at the END of the score are filled with sixteenths, a
+    // span is deleted, and MuseScore's refill must equal the port's prediction.
+    function caseRestOracle(r) {
+        var st = appendPitched();
+        if (st < 0) { H.check(r, "rest oracle: fixture staff", false, "append failed"); return; }
+        var sections = [
+            { n: 4, d: 4, cases: [[240, 1680], [480, 960], [480, 1440], [1200, 720], [120, 600], [360, 1080]] },
+            { n: 3, d: 4, cases: [[0, 960], [480, 960], [240, 960], [120, 1200]] },
+            { n: 6, d: 8, cases: [[240, 1200], [0, 720], [480, 960], [120, 1080]] },
+            { n: 2, d: 4, cases: [[240, 720], [0, 480], [120, 600]] }
+        ];
+        for (var si = 0; si < sections.length; ++si) {
+            var sec = sections[si];
+            var first = measureCount() + 1;
+            curScore.startCmd(); curScore.appendMeasures(sec.cases.length + 1); curScore.endCmd();
+            var m0 = measureN(first);
+            curScore.startCmd();
+            var tc = curScore.newCursor();
+            tc.staffIdx = 0; tc.voice = 0; tc.rewindToTick(m0.firstSegment.tick);
+            var ts = newElement(Element.TIMESIG);
+            ts.timesig = fraction(sec.n, sec.d);
+            tc.add(ts);
+            curScore.endCmd();
+            var bad = [];
+            for (var ci = 0; ci < sec.cases.length; ++ci) {
+                var mb = measureN(first + ci);
+                var bar = mb.firstSegment.tick;
+                var barTicks = mb.timesigNominal.ticks;
+                writeVoice(st, 0, bar, (function () { var a = []; for (var k = 0; k < barTicks / 120; ++k) a.push({ note: 120 }); return a; })());
+                var a0 = sec.cases[ci][0], len = sec.cases[ci][1];
+                curScore.selection.selectRange(bar + a0, bar + a0 + len, st, st + 1);
+                cmd("delete");
+                var got = restShape(st, 0, bar + a0, bar + a0 + len);
+                var want = Rests.restDurations(sec.n, sec.d, a0, len, division).join("|");
+                if (got !== want) bad.push("@" + a0 + "+" + len + " MS=" + got + " port=" + want);
+            }
+            H.check(r, "rest oracle " + sec.n + "/" + sec.d + ": port matches MuseScore's own grouping",
+                    bad.length === 0, bad.length ? bad.join("; ") : sec.cases.length + " spans agree");
+        }
+        curScore.selection.clear();
+    }
+
+    // Autofix "group rests": a run MuseScore would write differently is rewritten
+    // its way — keeping the chord symbol on it; a run with a fermata is left alone
+    // (note input would delete the fermata); a second run changes nothing.
+    function caseGroupRests(r) {
+        var st = appendPitched();
+        if (st < 0) { H.check(r, "group rests: fixture staff", false, "append failed"); return; }
+        ensureMeasures(2);
+        var bar1 = measureN(1).firstSegment.tick, bar2 = measureN(2).firstSegment.tick;
+        writeVoice(st, 0, bar1, [{ note: 480 }, 240, 480, 240, 480]);   // rest 720..1200 crosses beat 3
+        addChordSymbol(st, bar1 + 720, "C7");
+        writeVoice(st, 0, bar2, [{ note: 480 }, 240, 480, 240, 480]);
+        markSource(st, bar2 + 720, SymId.articStaccatoAbove, SymId.fermataAbove);   // fermata on the rest
+        var before2 = restShape(st, 0, bar2, bar2 + 1920);
+        H.check(r, "group rests: fixture as written", restShape(st, 0, bar1, bar1 + 1920) === "chord@0|240|480|240|480",
+                restShape(st, 0, bar1, bar1 + 1920));
+
+        var res = Effects.groupRests(effectCtx());
+        var shape = restShape(st, 0, bar1, bar1 + 1920);
+        H.check(r, "group rests: regrouped as MuseScore writes it (quarter + half)", shape === "chord@0|480|960",
+                shape + " | regrouped=" + res.regrouped);
+        H.check(r, "group rests: chord symbol kept", harmonyCount(st, bar1, bar1 + 1920) === 1,
+                "harmonies=" + harmonyCount(st, bar1, bar1 + 1920));
+        H.check(r, "group rests: run with a fermata left alone", restShape(st, 0, bar2, bar2 + 1920) === before2,
+                "before " + before2 + " after " + restShape(st, 0, bar2, bar2 + 1920));
+        var again = Effects.groupRests(effectCtx());
+        H.check(r, "group rests: a second run changes nothing (whole score)", again.regrouped === 0,
+                "regrouped=" + again.regrouped);
+    }
+
+    // Autofix "whole-bar rests": a bar that is only rests (voice 1 quarters, voice 2
+    // halves, a chord symbol) becomes ONE full-measure rest in voice 1 with voice 2
+    // gone and the chord symbol kept; a bar whose voice 2 has a note gets a voice-1
+    // bar rest and keeps voice 2; a second run changes nothing.
+    function caseFullBarRests(r) {
+        var st = appendPitched();
+        if (st < 0) { H.check(r, "whole-bar rests: fixture staff", false, "append failed"); return; }
+        ensureMeasures(2);
+        var bar1 = measureN(1).firstSegment.tick, bar2 = measureN(2).firstSegment.tick;
+        writeVoice(st, 0, bar1, [480, 480, 480, 480]);
+        writeVoice(st, 1, bar1, [960, 960]);
+        addChordSymbol(st, bar1 + 960, "F7");
+        writeVoice(st, 0, bar2, [480, 480, 480, 480]);
+        writeVoice(st, 1, bar2, [{ note: 960 }, 960]);
+        var v2before = restShape(st, 1, bar2, bar2 + 1920);
+
+        var res = Effects.fullBarRests(effectCtx());
+        var v1 = crsIn(st, 0, bar1, bar1 + 1920);
+        H.check(r, "whole-bar rests: all-rest bar is one full-measure rest", v1.length === 1 && v1[0].isFullMeasureRest === true,
+                restShape(st, 0, bar1, bar1 + 1920) + " | bars=" + res.bars);
+        H.check(r, "whole-bar rests: its voice-2 rests are gone", crsIn(st, 1, bar1, bar1 + 1920).length === 0,
+                restShape(st, 1, bar1, bar1 + 1920));
+        H.check(r, "whole-bar rests: chord symbol kept", harmonyCount(st, bar1, bar1 + 1920) === 1,
+                "harmonies=" + harmonyCount(st, bar1, bar1 + 1920));
+        var b2 = crsIn(st, 0, bar2, bar2 + 1920);
+        H.check(r, "whole-bar rests: rest-only voice 1 under a voice-2 note is one bar rest",
+                b2.length === 1 && b2[0].isFullMeasureRest === true, restShape(st, 0, bar2, bar2 + 1920));
+        H.check(r, "whole-bar rests: that voice 2 is untouched", restShape(st, 1, bar2, bar2 + 1920) === v2before,
+                "before " + v2before + " after " + restShape(st, 1, bar2, bar2 + 1920));
+        var again = Effects.fullBarRests(effectCtx());
+        H.check(r, "whole-bar rests: a second run changes nothing (whole score)", again.bars === 0, "bars=" + again.bars);
+    }
+
+    // One voice of [from, to) as "n480~ r240 …": n = chord, r = rest, the length in
+    // ticks, "~" when every note is tied into the next chord.
+    function rhythmShape(staffIdx, voice, from, to) {
+        var out = [];
+        var crs = crsIn(staffIdx, voice, from, to);
+        for (var i = 0; i < crs.length; ++i) {
+            var el = crs[i];
+            var ticks = el.actualDuration ? el.actualDuration.ticks : el.duration.ticks;
+            var tied = false;
+            if (el.type === Element.CHORD) {
+                tied = el.notes.length > 0;
+                for (var n = 0; n < el.notes.length; ++n) if (!el.notes[n].tieForward) tied = false;
+            }
+            out.push((el.type === Element.CHORD ? "n" : "r") + ticks + (tied ? "~" : ""));
+        }
+        return out.join(" ");
+    }
+
+    // Autofix "group notes" (Regroup rhythms, bar by bar): a half note on the second
+    // eighth splits at beat 3 (chord symbol kept); a quarter tied to a quarter on
+    // beats 1-2 becomes a half; a half on beat 2 is fine and untouched; a bar with a
+    // fermata is skipped (Regroup rhythms would delete it). A second run over the
+    // WHOLE score must change nothing — the port predicting exactly what MuseScore
+    // wrote is what makes that true.
+    function caseGroupNotes(r) {
+        var st = appendPitched();
+        if (st < 0) { H.check(r, "group notes: fixture staff", false, "append failed"); return; }
+        ensureMeasures(4);
+        var b = [0, measureN(1).firstSegment.tick, measureN(2).firstSegment.tick,
+                 measureN(3).firstSegment.tick, measureN(4).firstSegment.tick];
+        writeVoice(st, 0, b[1], [{ note: 240 }, { note: 960 }, { note: 240 }, { note: 480 }]);
+        addChordSymbol(st, b[1] + 240, "Dm7");
+        writeVoice(st, 0, b[2], [{ note: 480 }, { note: 480 }, { note: 960 }]);
+        curScore.selection.clear();
+        curScore.selection.select(chordAt(st, b[2]).notes[0]);
+        cmd("tie");
+        writeVoice(st, 0, b[3], [{ note: 480 }, { note: 960 }, { note: 480 }]);
+        writeVoice(st, 0, b[4], [{ note: 240 }, { note: 960 }, { note: 240 }, { note: 480 }]);
+        markSource(st, b[4] + 240, SymId.articStaccatoAbove, SymId.fermataAbove);
+        var bar = function (i) { return rhythmShape(st, 0, b[i], b[i] + 1920); };
+        var before3 = bar(3), before4 = bar(4);
+        H.check(r, "group notes: fixture as written", bar(1) === "n240 n960 n240 n480" && bar(2) === "n480~ n480 n960",
+                "bar1 " + bar(1) + " | bar2 " + bar(2));
+
+        var res = Effects.groupNotes(effectCtx());
+        H.check(r, "group notes: half on the 2nd eighth splits at beat 3", bar(1) === "n240 n720~ n240 n240 n480",
+                bar(1) + " | bars=" + res.bars + " skipped=" + res.skipped);
+        H.check(r, "group notes: chord symbol kept", harmonyCount(st, b[1], b[1] + 1920) === 1,
+                "harmonies=" + harmonyCount(st, b[1], b[1] + 1920));
+        H.check(r, "group notes: tied quarters on beats 1-2 become a half", bar(2) === "n960 n960", bar(2));
+        H.check(r, "group notes: a half on beat 2 is left alone", bar(3) === before3, "before " + before3 + " after " + bar(3));
+        H.check(r, "group notes: a bar with a fermata is skipped", bar(4) === before4 && res.skipped >= 1,
+                "before " + before4 + " after " + bar(4) + " skipped=" + res.skipped);
+        var again = Effects.groupNotes(effectCtx());
+        H.check(r, "group notes: a second run changes nothing (whole score)", again.bars === 0,
+                "bars=" + again.bars);
+    }
+
     // Format Line Breaks — Effects.applyLineBreaks attaches the LINE breaks the
     // (unit-tested) LineBreaks.computeBreaks planner decides. One box per measure,
     // "every 2 bars", over ≥6 bars → predictable break count.
@@ -989,7 +1554,9 @@ MuseScore {
                         else if (seen && seg.tick !== cursorTick)
                             why = (seg.tick > cursorTick ? "gap" : "overlap") + " at " + seg.tick + " (expected " + cursorTick + ")";
                         seen = true;
-                        cursorTick = seg.tick + el.duration.ticks;
+                        // actualDuration, not duration: a triplet eighth is NOMINALLY
+                        // 240 but spans 160, so the nominal sum reports a bogus overlap.
+                        cursorTick = seg.tick + (el.actualDuration ? el.actualDuration.ticks : el.duration.ticks);
                     }
                     if (seen && !why && cursorTick !== mEnd) why = "ends at " + cursorTick + " not " + mEnd;
                     if (seen && why) {
@@ -1009,7 +1576,7 @@ MuseScore {
     }
 
     // Run every case and show/emit the report. Called from settleTimer, i.e. after the
-    // drum-staff append (in onRun) has had an event-loop turn to settle.
+    // drum-staff append (in start()) has had an event-loop turn to settle.
     function runCases() {
         var r = H.newReport();
 
@@ -1024,17 +1591,34 @@ MuseScore {
         caseCompCuesNotesDrumMidBar(r);
         caseCompCuesNotesDrumEighths(r);
         caseCompCuesNotesDrumQuartersPartial(r);
+        caseCompCuesNotesDrumTuplet(r);
+        caseCompCuesNotesDrumMultiBar(r);
+        caseCompCuesNotesDrumOverGroove(r);
+        caseCompTiesDrum(r);
         // Runs AFTER the drum-cue cases on purpose: it appends a staff, and doing so
         // before the drum cue perturbs that effect's (changeCRlen-sensitive) layout and
         // corrupts its bar. Kept last so the drum cue writes in its normal context; this
         // case's own staff is independent. (The integrity scan below guards both.)
         caseFillEmptyBeatsVoice3(r);
+        caseCompCuesNotesTuplet(r);
+        caseCompSlashesNotesTuplet(r);
+        caseCompCuesNotesOddLeadIn(r);
+        caseFillEmptyBeatsTupletRests(r);
+        caseCompTies(r);
+        caseCompTiesOutOfRange(r);
         caseLineBreaks(r);
         // Last: these run over the WHOLE score, so let every other fixture exist
         // (and be asserted) first — that also makes them a sweep over everything the
         // other cases wrote.
         caseCourtesyAccidentals(r);
         caseCourtesyAccidentalsIdempotent(r);
+
+        // Rest fixes last: they sweep the WHOLE score (every fixture above included),
+        // and the oracle appends time-signature changes at the end.
+        caseRestOracle(r);
+        caseGroupRests(r);
+        caseFullBarRests(r);
+        caseGroupNotes(r);
 
         checkNoCorruptBars(r);
 
@@ -1045,7 +1629,11 @@ MuseScore {
             + "\n\nThrowaway fixture — close WITHOUT saving.");
     }
 
-    onRun: {
+    // A form gets no onRun: start once the view is up (deferred a tick, as the
+    // shipping forms do).
+    Component.onCompleted: Qt.callLater(start)
+
+    function start() {
         var guard = JazzKit.guardScore(curScore, mscoreMajorVersion, mscoreMinorVersion);
         if (guard !== "") { infoDialog.show(guard); return; }
         if (scoreHasNotes()) {

@@ -219,7 +219,7 @@ var AUTOFIX_TAG = "jazzKitAutofix";
 
 /** Defaults for a score with no stored Autofix settings.
  *  bracket: 0 none, 1 parenthesis, 2 bracket (MuseScore's AccidentalBracket). */
-var AUTOFIX_DEFAULTS = { marcato: true, courtesy: true, bracket: 1 };
+var AUTOFIX_DEFAULTS = { marcato: true, courtesy: true, bracket: 1, groupRests: true, fullBarRests: true, groupNotes: true };
 
 /**
  * Autofix settings for a score, with every missing/garbled field filled from the
@@ -234,7 +234,10 @@ function loadAutofixSettings(curScore) {
     return {
         marcato: s.marcato === undefined ? AUTOFIX_DEFAULTS.marcato : !!s.marcato,
         courtesy: s.courtesy === undefined ? AUTOFIX_DEFAULTS.courtesy : !!s.courtesy,
-        bracket: bracket
+        bracket: bracket,
+        groupRests: s.groupRests === undefined ? AUTOFIX_DEFAULTS.groupRests : !!s.groupRests,
+        fullBarRests: s.fullBarRests === undefined ? AUTOFIX_DEFAULTS.fullBarRests : !!s.fullBarRests,
+        groupNotes: s.groupNotes === undefined ? AUTOFIX_DEFAULTS.groupNotes : !!s.groupNotes
     };
 }
 
@@ -250,7 +253,10 @@ function saveAutofixSettings(curScore, settings) {
         marcato: !!settings.marcato,
         courtesy: !!settings.courtesy,
         bracket: (settings.bracket >= 0 && settings.bracket <= 2)
-            ? settings.bracket : AUTOFIX_DEFAULTS.bracket
+            ? settings.bracket : AUTOFIX_DEFAULTS.bracket,
+        groupRests: !!settings.groupRests,
+        fullBarRests: !!settings.fullBarRests,
+        groupNotes: !!settings.groupNotes
     });
 }
 

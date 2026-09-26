@@ -146,6 +146,13 @@ declare namespace JK {
         marcato: boolean;
         courtesy: boolean;
         bracket: number;
+        /** Regroup runs of rests by the time signature (as MuseScore writes them). */
+        groupRests: boolean;
+        /** Bars that are only rests (every voice) → one full-measure rest. */
+        fullBarRests: boolean;
+        /** Regroup notes (tie chains) by the time signature — MuseScore's Regroup
+         *  rhythms, bar by bar where it changes something and loses nothing. */
+        groupNotes: boolean;
     }
 
     // --- effect inputs and results (effects.js ⇄ .qml) -----------------------
@@ -171,9 +178,22 @@ declare namespace JK {
         targets: Array<TargetSpec | number>;
     }
 
+    /** A tie a comp effect wants on a target: from the note at `tick` to the one at
+     *  `nextTick`, same `pitch`, in `voice` (-1 = any voice of the staff). Made by
+     *  Effects.applyTies once the calling form has closed. */
+    interface TiePlan {
+        staffIdx: number;
+        voice: number;
+        tick: number;
+        nextTick: number;
+        pitch: number;
+    }
+
     interface CompResult {
         targetsDone: number;
         error: string;
+        /** Ties to make with Effects.applyTies (absent on error). */
+        ties?: TiePlan[];
     }
 
     interface FillResult {
@@ -218,6 +238,17 @@ declare namespace JK {
         chordNames(symId: MS.SymId, articulations: MS.Articulation[]): string[];
         classifyChord(names?: string[]): Classification;
         staccatoCandidates(symId: MS.SymId, wantAbove: boolean): MS.SymIdValue[];
+    }
+
+    interface RestsLib {
+        restDurations(num: number, den: number, rtick: number, len: number, division?: number): number[];
+        restRuns(crs: { rtick: number; ticks: number; isRest: boolean; inTuplet: boolean }[]):
+            { start: number; end: number; lengths: number[] }[];
+        sameLengths(a: number[], b: number[]): boolean;
+        noteDurations(num: number, den: number, rtick: number, len: number, division?: number): number[];
+        voiceNeedsRegroup(num: number, den: number,
+            crs: { rtick: number; ticks: number; isRest: boolean; inTuplet: boolean; tiedNext: boolean }[],
+            barTicks: number, division?: number): boolean;
     }
 
     interface AccidentalsLib {

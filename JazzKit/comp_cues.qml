@@ -29,15 +29,15 @@ MuseScore {
 
         settingsTag: "jazzKitCueNotes"
         prompt: qsTr("Add a cue to:")
-        resultTemplate: qsTr("Added a cue to %1 instrument(s).")
         effect: Effects.compCuesNotes
+        finish: Effects.applyTies
 
         // The plugin globals: context properties of THIS file's QML context, so
         // they are handed to the component (and to the effect layer) explicitly.
         ctx: ({
             curScore: curScore, newElement: newElement,
-            Element: Element, Cursor: Cursor, division: division,
-            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam,
+            Element: Element, Segment: Segment, Cursor: Cursor, division: division, fraction: fraction,
+            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam, cmd: cmd,
             mscoreMajorVersion: mscoreMajorVersion,
             mscoreMinorVersion: mscoreMinorVersion
         })
