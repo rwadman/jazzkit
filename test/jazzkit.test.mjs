@@ -242,13 +242,13 @@ test("loadAutofixSettings: defaults when nothing is stored (and with no score)",
 
 test("autofix settings round-trip", () => {
     const sc = fakeMetaScore();
-    JazzKit.saveAutofixSettings(sc, { marcato: false, courtesy: true, bracket: 2 });
-    eq(JazzKit.loadAutofixSettings(sc), { marcato: false, courtesy: true, bracket: 2 });
+    JazzKit.saveAutofixSettings(sc, { marcato: false, courtesy: true, bracket: 2, groupRests: false, fullBarRests: true, groupNotes: false });
+    eq(JazzKit.loadAutofixSettings(sc), { marcato: false, courtesy: true, bracket: 2, groupRests: false, fullBarRests: true, groupNotes: false });
 });
 
 test("loadAutofixSettings: a partial tag keeps the defaults for what's missing", () => {
     const sc = fakeMetaScore({ [JazzKit.AUTOFIX_TAG]: JSON.stringify({ marcato: false }) });
-    eq(JazzKit.loadAutofixSettings(sc), { marcato: false, courtesy: true, bracket: 1 });
+    eq(JazzKit.loadAutofixSettings(sc), { marcato: false, courtesy: true, bracket: 1, groupRests: true, fullBarRests: true, groupNotes: true });
 });
 
 test("loadAutofixSettings: an out-of-range bracket falls back to the default", () => {

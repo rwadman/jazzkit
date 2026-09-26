@@ -46,7 +46,11 @@ declare namespace MS {
 
     /** curScore.selection. selectRange's endTick/endStaff are exclusive. */
     interface Selection {
-        selectRange(startTick: number, endTick: number, startStaff: number, endStaff: number): void;
+        /** false (and a no-op) while a startCmd is open — see api-gotchas. */
+        selectRange(startTick: number, endTick: number, startStaff: number, endStaff: number): boolean;
+        /** Select one element; `add` extends the selection to a list selection. */
+        select(element: any, add?: boolean): boolean;
+        clear(): void;
         isRange?: boolean;
         /** Selected elements; empty even on a "range" when nothing is inside it. */
         elements: any[];
@@ -67,6 +71,8 @@ declare namespace MS {
         excerpts?: Excerpt[];
         metaTag(tag: string): string;
         setMetaTag(tag: string, value: string): void;
+        /** Slurs, hairpins, … (startElement / endElement / type). */
+        spanners?: any[];
         /** Staff count (the documented name on 4.4+ — see countStaves). */
         nstaves?: number;
         newCursor(): Cursor;
@@ -141,10 +147,17 @@ declare namespace MS {
         tuplet?: Tuplet | null;
         /** The parent element (for a chord/rest: its Segment). */
         parent?: any;
+        /** A rest of type "measure" (a centred whole-bar rest). */
+        isFullMeasureRest?: boolean;
+        visible?: boolean;
         /** Cue size ("Whether this element is cue size"). */
         small?: boolean;
         /** Notes of a chord (Element.CHORD). */
         notes?: Note[];
+        /** Lyrics attached to a chord/rest. */
+        lyrics?: any[];
+        /** Track (staffIdx * 4 + voice). */
+        track?: number;
         /** Articulations attached to a chord. */
         articulations?: Articulation[];
         /** Grace-note chords attached to a chord. */
@@ -204,6 +217,8 @@ declare namespace MS {
         accidentalType?: any;
         /** The tie ending on this note, or null (a tie continuation). */
         tieBack?: any;
+        /** The tie starting on this note, or null. */
+        tieForward?: any;
     }
 
     /** An engraved accidental attached to a note. */

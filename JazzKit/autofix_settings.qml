@@ -20,6 +20,9 @@ MuseScore {
     property bool optMarcato: true
     property bool optCourtesy: true
     property int valBracket: 1     // 0 none, 1 parenthesis, 2 bracket
+    property bool optGroupRests: true
+    property bool optFullBarRests: true
+    property bool optGroupNotes: true
 
     property string message: ""    // non-empty => show result instead of options
 
@@ -30,13 +33,18 @@ MuseScore {
         root.optMarcato = s.marcato;
         root.optCourtesy = s.courtesy;
         root.valBracket = s.bracket;
+        root.optGroupRests = s.groupRests;
+        root.optFullBarRests = s.fullBarRests;
+        root.optGroupNotes = s.groupNotes;
     }
 
     function save() {
         var guard = JazzKit.guardScore(curScore, mscoreMajorVersion, mscoreMinorVersion);
         if (guard !== "") { root.message = guard; return; }
         JazzKit.saveAutofixSettings(curScore, {
-            marcato: root.optMarcato, courtesy: root.optCourtesy, bracket: root.valBracket
+            marcato: root.optMarcato, courtesy: root.optCourtesy, bracket: root.valBracket,
+            groupRests: root.optGroupRests, fullBarRests: root.optFullBarRests,
+            groupNotes: root.optGroupNotes
         });
         root.message = qsTr("Saved. Run JazzKit ▸ Autofix to apply.");
     }
@@ -95,6 +103,22 @@ MuseScore {
                     }
                 }
                 Item { Layout.fillWidth: true }
+            }
+
+            CheckBox {
+                text: qsTr("Group notes by the time signature (like Regroup rhythms)")
+                checked: root.optGroupNotes
+                onClicked: root.optGroupNotes = !root.optGroupNotes
+            }
+            CheckBox {
+                text: qsTr("Group rests by the time signature")
+                checked: root.optGroupRests
+                onClicked: root.optGroupRests = !root.optGroupRests
+            }
+            CheckBox {
+                text: qsTr("Bars with only rests → one whole-bar rest")
+                checked: root.optFullBarRests
+                onClicked: root.optFullBarRests = !root.optFullBarRests
             }
         }
 

@@ -448,11 +448,37 @@ test("compCuesNotes: tuplets without ctx.fraction are refused before anything is
 test("collapseTuplets: a tuplet group becomes one CR over its span, a note if any member is", () => {
     const tup = { start: 480, actual: 3, normal: 2, num: 1, den: 4, ticks: 480 };
     const cr = (tick, isRest, extra) => Object.assign({ tick, num: 1, den: 8, ticks: 160, isRest, tuplet: tup,
-        pitches: isRest ? [] : [60], accents: [], fermatas: [] }, extra);
-    const plain = { tick: 0, num: 1, den: 4, ticks: 480, isRest: false, tuplet: null, pitches: [60], accents: [], fermatas: [] };
+        pitches: isRest ? [] : [60], ties: [], accents: [], fermatas: [] }, extra);
+    const plain = { tick: 0, num: 1, den: 4, ticks: 480, isRest: false, tuplet: null, pitches: [60], ties: [], accents: [], fermatas: [] };
     const out = Effects.collapseTuplets([plain, cr(480, true, { fermatas: ["fer"] }), cr(640, false), cr(800, true)]);
     eq(out.length, 2);
     eq(out[0], plain);
     eq([out[1].tick, out[1].num, out[1].den, out[1].ticks, out[1].isRest, out[1].tuplet], [480, 1, 4, 480, false, null]);
     eq(out[1].fermatas, ["fer"]);   // the head member's markings
+});
+
+// --- ties (planned here, made by cmd("tie") after the write — GUI-verified) ----
+
+const crAt = (tick, ticks, pitches, ties) => ({ tick, num: 1, den: 4, ticks, isRest: !pitches, tuplet: null,
+    pitches: pitches || [], ties: ties || [], accents: [], fermatas: [] });
+
+test("planTies: a tie into the next same-pitch note is carried", () => {
+    eq(Effects.planTies([crAt(0, 480, [62], [62]), crAt(480, 480, [62])], false),
+       [{ tick: 0, nextTick: 480, pitch: 62 }]);
+});
+
+test("planTies: a chord ties only the pitches that continue", () => {
+    eq(Effects.planTies([crAt(0, 480, [60, 64], [60, 64]), crAt(480, 480, [60, 65])], false),
+       [{ tick: 0, nextTick: 480, pitch: 60 }]);
+});
+
+test("planTies: nothing to land on — tie out of the range, into a rest, or across a gap", () => {
+    eq(Effects.planTies([crAt(0, 480, [62], [62])], false), []);                          // last CR
+    eq(Effects.planTies([crAt(0, 480, [62], [62]), crAt(480, 480, null)], false), []);    // rest next
+    eq(Effects.planTies([crAt(0, 480, [62], [62]), crAt(960, 480, [62])], false), []);    // not adjacent
+});
+
+test("planTies: one tie per CR for the single-note writers (slashes, drum cue)", () => {
+    eq(Effects.planTies([crAt(0, 480, [60, 64], [60, 64]), crAt(480, 480, [60, 64])], true),
+       [{ tick: 0, nextTick: 480, pitch: -1 }]);
 });

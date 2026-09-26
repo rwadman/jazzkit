@@ -10,6 +10,11 @@ import "lib/jazzkit.js" as JazzKit
 // settingsTag, their two strings and the effect they call, so all of that comes in
 // as properties.
 //
+// A successful Apply CLOSES the dialog: the effect's ties are made with
+// cmd("tie"), which MuseScore refuses while a plugin window is open — so the form
+// quits first and then runs `finish` (Effects.applyTies); its JS keeps running
+// after quit() (api-gotchas, "Extension form actions").
+//
 // This is the dialog CONTENT, not the root: the manifest maps an action to a file
 // whose root must be MuseScore{}, so each action file keeps its own root and fills
 // it with this component. It sits NEXT TO the action files (not in lib/) so it needs
@@ -36,8 +41,8 @@ ColumnLayout {
     // ---- parameters (set by the action file) ----------------------------------
     property string settingsTag: ""       // per-score metatag holding the last picks
     property string prompt: ""            // label above the instrument list
-    property string resultTemplate: ""    // success message, one %1 = targets done
-    property var effect: null             // Effects.<fn>(ctx, args) -> {error?, targetsDone}
+    property var effect: null             // Effects.<fn>(ctx, args) -> {error, targetsDone, ties}
+    property var finish: null             // Effects.applyTies(ctx, ties, args), run AFTER closing
     property var ctx: ({})                // plugin globals; see the action's effectCtx
 
     signal closeRequested()
@@ -100,13 +105,15 @@ ColumnLayout {
         }
         JazzKit.saveJsonTag(ctx.curScore, settingsTag, { ids: picked.ids });
 
-        var res = effect(ctx, {
+        var args = {
             selStart: selection.selStart, selEnd: selection.selEnd,
             measureTick: selection.measureTick, srcStaffIdx: selection.staffIdx,
             targets: picked.targets
-        });
-        form.message = res.error ? res.error : resultTemplate.arg(res.targetsDone);
-        updateSize();
+        };
+        var res = effect(ctx, args);
+        if (res.error) { form.message = res.error; updateSize(); return; }
+        form.closeRequested();                         // quit() — frees cmd("tie")
+        if (finish) finish(ctx, res.ties || [], args);
     }
 
     // --- result view ---

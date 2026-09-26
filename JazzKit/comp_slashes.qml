@@ -27,13 +27,13 @@ MuseScore {
 
         settingsTag: "jazzKitCompSlashes"
         prompt: qsTr("Comp slashes into voice 1 of:")
-        resultTemplate: qsTr("Added comp slashes to %1 instrument(s).")
         effect: Effects.compSlashesNotes
+        finish: Effects.applyTies
 
         ctx: ({
             curScore: curScore, newElement: newElement,
             Element: Element, Segment: Segment, Cursor: Cursor, division: division, fraction: fraction,
-            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam,
+            Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam, cmd: cmd,
             mscoreMajorVersion: mscoreMajorVersion,
             mscoreMinorVersion: mscoreMinorVersion
         })

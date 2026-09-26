@@ -18,6 +18,7 @@
 var JazzKit = require("lib/jazzkit.js");
 var Articulations = require("lib/articulations.js");
 var Accidentals = require("lib/accidentals.js");
+var Rests = require("lib/rests.js");
 var Effects = require("lib/effects.js");
 
 // The effect layer takes its MuseScore globals through a ctx (a stateless lib
@@ -25,9 +26,10 @@ var Effects = require("lib/effects.js");
 function effectCtx() {
     return {
         curScore: curScore, newElement: newElement,
-        JazzKit: JazzKit, Articulations: Articulations, Accidentals: Accidentals,
+        JazzKit: JazzKit, Articulations: Articulations, Accidentals: Accidentals, Rests: Rests,
         SymId: SymId, Element: Element, Cursor: Cursor,
-        Segment: Segment, Accidental: Accidental
+        Segment: Segment, Accidental: Accidental, division: division,
+        cmd: cmd, removeElement: removeElement
     };
 }
 
@@ -51,7 +53,24 @@ function main() {
         console.log("JazzKit Autofix: courtesy accidentals — added " + a.added
                     + ", removed " + a.removed + " superfluous, skipped " + a.skipped);
     }
-    if (!s.marcato && !s.courtesy) console.log("JazzKit Autofix: no fixes enabled");
+    // Notes first (Regroup rhythms also regroups rests in the bars it touches), then
+    // whole-bar rests, then the remaining rest runs. A macro has no window, so the
+    // cmd()s these use are allowed.
+    if (s.groupNotes) {
+        var n = Effects.groupNotes(effectCtx());
+        console.log("JazzKit Autofix: note grouping — regrouped " + n.bars + " bar(s), skipped "
+                    + n.skipped + " (fermata / slur / marked tied note)");
+    }
+    if (s.fullBarRests) {
+        var f = Effects.fullBarRests(effectCtx());
+        console.log("JazzKit Autofix: full-bar rests — " + f.bars + " bar(s)");
+    }
+    if (s.groupRests) {
+        var g = Effects.groupRests(effectCtx());
+        console.log("JazzKit Autofix: rest grouping — regrouped " + g.regrouped + " run(s)");
+    }
+    if (!s.marcato && !s.courtesy && !s.groupRests && !s.fullBarRests && !s.groupNotes)
+        console.log("JazzKit Autofix: no fixes enabled");
 
     quit();
 }

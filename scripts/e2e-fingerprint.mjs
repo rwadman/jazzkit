@@ -22,6 +22,7 @@ export const TRACKED = [
     "JazzKit/lib/linebreaks.js",
     "JazzKit/lib/slashes.js",
     "JazzKit/lib/jazzkit.js",
+    "JazzKit/lib/rests.js",
 ];
 
 export function fingerprint() {

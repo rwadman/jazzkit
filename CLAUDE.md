@@ -1,7 +1,7 @@
 # JazzKit
 
 MuseScore 4 plugin(s) that nudge notation toward jazz conventions. QML, plugin
-API, MuseScore 4.4+ (developed on 4.7.3, macOS/Apple Silicon).
+API, MuseScore 4.4+ (developed on 4.7.3–4.7.5, macOS/Apple Silicon).
 
 ## Language style
 
@@ -30,9 +30,12 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   around the shared `CompTargetsForm.qml` (a PascalCase **component**, not an
   action — no `MuseScore{}` root, resolved implicitly from the bundle dir, handed
   the plugin globals as its `ctx`). **A form gets no `onRun`** — work
-  runs from `Component.onCompleted` / button handlers — and **cannot dispatch
-  notation `cmd()`s** (focus trap), so every effect is **direct-API only** (cursor
-  note input + element properties; slash notation replicates `Chord::setSlash`).
+  runs from `Component.onCompleted` / button handlers — and **can't dispatch
+  notation `cmd()`s while its window is open**, so every effect is **direct-API
+  only** (cursor note input + element properties; slash notation replicates
+  `Chord::setSlash`). The one `cmd()` JazzKit needs, `cmd("tie")` (the API can't
+  build a tie), runs after the form has closed itself with `quit()`
+  (`Effects.applyTies`; see api-gotchas).
   The exception is `autofix.js`, a `type: "macros"` action: a form is a *view*, so
   it ALWAYS opens a window — an action that takes no input and should run silently
   must be a macro (`main()`, no UI, `require("lib/x.js")` instead of `import`,
@@ -40,7 +43,7 @@ the GUI; debugging is log + crash-dump analysis (scripts in the skill).
   extension script engine so the macro's module wiring is unit-tested; the effects
   it calls are the same ones the GUI harness drives.
 - `JazzKit/lib/*.js` — shared **pure** JS libraries (`jazzkit.js`,
-  `accidentals.js`, `articulations.js`, `linebreaks.js`, `slashes.js`) plus `effects.js` (the
+  `accidentals.js`, `articulations.js`, `linebreaks.js`, `rests.js`, `slashes.js`) plus `effects.js` (the
   API-touching effect layer — cursor/direct-API mutations, `// @ts-check`ed but
   exercised by the GUI harness + a fake cursor in `test/effects.test.mjs`).
   Imported into a form via `import "lib/x.js" as X`. Each ends with a per-file
@@ -75,7 +78,7 @@ npm run typecheck                     # JSDoc types on JazzKit/lib/*.js (tsc --c
 npm run check                         # QML/manifest lint (JazzKit/ + harness/)
 npm run e2e:check                     # a passing GUI harness run is recorded for this code
 scripts/sync.sh   # deploy JazzKit → run from Plugins menu (GUI)
-scripts/e2e.sh [--autoclick]   # deploy both pkgs, open a blank fixture, launch MuseScore, (auto-)run the harness, print+accept its report
+scripts/e2e.sh [--autoclick]   # deploy JazzKit + the dev-only harness action (Plugins ▸ JazzKit ▸ zz Test Harness), open a blank fixture, (auto-)run it, print+accept its report
 scripts/mslog.sh          # what it did
 python3 scripts/analyze-crash.py  # if it crashed
 ```
