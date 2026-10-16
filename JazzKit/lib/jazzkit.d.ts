@@ -114,6 +114,30 @@ declare namespace JK {
         musicBars: number;
     }
 
+    /** One visual box as structural facts (effects.js readLineBoxes → the pure
+     *  LineBreaks.computeBreaks). */
+    interface LineBox {
+        /** Real measures the box spans (a multirest is N bars). */
+        musicBars: number;
+        /** The box's last measure ends with a double barline. */
+        endsDouble: boolean;
+        /** The box's last measure is an end-repeat. */
+        repeatEnd: boolean;
+        /** The box's first measure is a start-repeat. */
+        repeatStart: boolean;
+        /** The box's first measure starts ending (volta) N of its group, else 0. */
+        endingStart?: number;
+        /** The box's last measure is in an ending another one follows (a 1st ending). */
+        inEnding?: boolean;
+        /** A pickup (anacrusis) or other bar excluded from the bar count: adds 0 to
+         *  the every-N count. */
+        pickup?: boolean;
+        /** A rehearsal mark sits on the box's first measure (a new section). */
+        rehearsal?: boolean;
+        /** A coda sign sits on the box's first measure. */
+        coda?: boolean;
+    }
+
     // --- selection and targets (jazzkit.js ⇄ effects.js ⇄ .qml) --------------
 
     /** One staff a comp action writes into. */
@@ -180,13 +204,16 @@ declare namespace JK {
 
     /** A tie a comp effect wants on a target: from the note at `tick` to the one at
      *  `nextTick`, same `pitch`, in `voice` (-1 = any voice of the staff). Made by
-     *  Effects.applyTies once the calling form has closed. */
+     *  Effects.applyTies once the calling form has closed, and only between notes
+     *  that carry `mark` — "cue" (cue-size) or "slash" (slash notehead) — so a tie
+     *  across the selection edge never lands on the user's own notes. */
     interface TiePlan {
         staffIdx: number;
         voice: number;
         tick: number;
         nextTick: number;
         pitch: number;
+        mark: string;
     }
 
     interface CompResult {
@@ -249,6 +276,12 @@ declare namespace JK {
         voiceNeedsRegroup(num: number, den: number,
             crs: { rtick: number; ticks: number; isRest: boolean; inTuplet: boolean; tiedNext: boolean }[],
             barTicks: number, division?: number): boolean;
+    }
+
+    interface LineBreaksLib {
+        groupBoxes(measureTicks: number[], boxStarts: { [tick: number]: boolean | undefined } | null): BoxGroup[];
+        voltaFlags(voltas: { start: number; end: number }[], boxes: { firstTick: number; lastTick: number }[]):
+            { endingStart: number; inEnding: boolean }[];
     }
 
     interface AccidentalsLib {

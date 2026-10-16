@@ -28,14 +28,34 @@ test("ticksToFraction: division defaults to 480 when omitted", () => {
 function frac(ticks) { return { ticks, numerator: Effects.ticksToFraction(ticks, DIV).z, denominator: Effects.ticksToFraction(ticks, DIV).n }; }
 // `add` mirrors Chord::addInternal (what cursor.add does for an ARTICULATION).
 function restEl(dur) { return { type: Element.REST, duration: frac(dur), notes: [], articulations: [], small: false, add(el) { this.articulations.push(el); } }; }
-function chordEl(dur, pitches, accents) {
-    return { type: Element.CHORD, duration: frac(dur), notes: pitches.map((p) => ({ pitch: p })), articulations: (accents || []).map((s) => ({ symbol: s })), small: false, add(el) { this.articulations.push(el); } };
+// `duration` is a setter, as in the API: writing a SHORTER Fraction to a placed
+// chord is Score::changeCRlen — the chord shrinks and the remainder becomes a rest.
+let LIVE = null;   // the FakeScore the setter edits (the most recently made one)
+function chordEl(dur, pitches, accents, ties) {
+    let d = frac(dur);
+    return { type: Element.CHORD, notes: pitches.map((p) => ({ pitch: p, tieForward: (ties || []).includes(p) || null })),
+        articulations: (accents || []).map((s) => ({ symbol: s })), small: false, add(el) { this.articulations.push(el); },
+        get duration() { return d; },
+        set duration(f) {
+            const ticks = Math.round((f.z / f.n) * WHOLE);
+            for (const [staff, segs] of Object.entries(LIVE.staves)) {
+                const seg = segs.find((s) => s.el === this);
+                if (!seg || ticks >= seg.dur) continue;
+                segs.push({ tick: seg.tick + ticks, dur: seg.dur - ticks, el: restEl(seg.dur - ticks) });
+                segs.sort((a, b) => a.tick - b.tick);
+                LIVE.ops.push({ op: "shorten", staff: Number(staff), tick: seg.tick, dur: ticks });
+                seg.dur = ticks;
+            }
+            d = frac(ticks);
+        } };
 }
 
 class FakeCursor {
     constructor(score) { this.score = score; this.staffIdx = 0; this.voice = 0; this.tick = 0; this._i = 0; this._dur = { z: 1, n: 4 }; this._lastChord = null; }
     get _segs() { return this.score.staves[this.staffIdx] || (this.score.staves[this.staffIdx] = []); }
     rewindToTick(t) {
+        // The real one crashes here (null segment from tick2leftSegment).
+        if (t >= this.score.lastSegment.tick) throw new Error("rewindToTick past the end of the score: " + t);
         const segs = this._segs; let i = 0;
         for (let k = 0; k < segs.length; k++) if (segs[k].tick <= t) i = k;
         this._i = i; this.tick = segs.length ? segs[i].tick : t;
@@ -122,13 +142,23 @@ class FakeCursor {
     }
 }
 
-class FakeScore { constructor() { this.staves = {}; this.ops = []; this.parts = []; } newCursor() { return new FakeCursor(this); } startCmd() {} endCmd() {} }
+// Four 4/4 bars (firstMeasure / nextMeasure / lastSegment are what _measureAt walks).
+class FakeScore {
+    constructor() {
+        this.staves = {}; this.ops = []; this.parts = []; LIVE = this;
+        let next = null;
+        for (let b = 3; b >= 0; b--) next = { firstSegment: { tick: b * WHOLE, segmentType: 0 }, nextMeasure: next };
+        this.firstMeasure = next;
+        this.lastSegment = { tick: 4 * WHOLE };
+    }
+    newCursor() { return new FakeCursor(this); } startCmd() {} endCmd() {}
+}
 
 const Direction = { DOWN: "DOWN", UP: "UP" };
 const NoteHeadGroup = { HEAD_SLASH: "HEAD_SLASH", HEAD_NORMAL: "HEAD_NORMAL" };
 const Beam = { NONE: "NONE" };
 function makeCtx(score) {
-    return { curScore: score, division: DIV, Element, Direction, NoteHeadGroup, Beam,
+    return { curScore: score, division: DIV, Element, Direction, NoteHeadGroup, Beam, Segment: { ChordRest: 1 },
              fraction: (z, n) => ({ z, n }),
              newElement: (type) => ({ type, symbol: undefined }) };
 }
@@ -481,4 +511,152 @@ test("planTies: nothing to land on — tie out of the range, into a rest, or acr
 test("planTies: one tie per CR for the single-note writers (slashes, drum cue)", () => {
     eq(Effects.planTies([crAt(0, 480, [60, 64], [60, 64]), crAt(480, 480, [60, 64])], true),
        [{ tick: 0, nextTick: 480, pitch: -1 }]);
+});
+
+// --- partial bars: nothing outside the selection is touched -------------------
+
+const vcr = (tick, end, isRest, inTuplet) => ({ tick, end, isRest: !!isRest, inTuplet: !!inTuplet });
+
+test("planLeadIn: a CR starting at selStart needs no lead-in", () => {
+    eq(Effects.planLeadIn([vcr(0, 960), vcr(960, 1920, true)], 0, 960, DIV, true), { from: 960, mode: "at", error: "" });
+});
+
+test("planLeadIn: a covering rest is overwritten from ITS start, not the bar start", () => {
+    // Beats 1-2 already comped; selection at beat 4 inside the half rest on 3-4.
+    eq(Effects.planLeadIn([vcr(0, 480), vcr(480, 960), vcr(960, 1920, true)], 0, 1440, DIV, true),
+       { from: 960, mode: "rests", error: "" });
+});
+
+test("planLeadIn: a covering chord is shortened (keeps its attack); without fraction() it falls back to rests", () => {
+    eq(Effects.planLeadIn([vcr(0, 960)], 0, 480, DIV, true), { from: 0, mode: "shorten", keep: 480, error: "" });
+    eq(Effects.planLeadIn([vcr(0, 960)], 0, 480, DIV, false), { from: 0, mode: "rests", error: "" });
+    eq(Effects.planLeadIn([vcr(0, 1920)], 0, 720, DIV, true).keep, 720);     // a dotted quarter is one value
+});
+
+test("planLeadIn: a lead no single value spells keeps the longest that fits, then rests", () => {
+    // 5/8: changeCRlen can't take it in one piece (it would overlap itself), so the
+    // note becomes a half and an eighth rest follows. Before: the note was lost.
+    eq(Effects.planLeadIn([vcr(0, 1920)], 0, 1200, DIV, true), { from: 0, mode: "shorten", keep: 960, error: "" });
+});
+
+test("longestValue: plain or dotted, never longer than the span or a whole note", () => {
+    eq(Effects.longestValue(1200, DIV), 960);
+    eq(Effects.longestValue(1440, DIV), 1440);   // dotted half
+    eq(Effects.longestValue(2400, DIV), 1920);
+    eq(Effects.longestValue(240, DIV), 240);
+    eq(Effects.longestValue(360, DIV), 360);     // dotted eighth
+});
+
+test("planLeadIn: an empty voice (or a gap) is filled from the end of its last CR", () => {
+    eq(Effects.planLeadIn([], 1920, 2400, DIV, true), { from: 1920, mode: "gap", error: "" });
+    eq(Effects.planLeadIn([vcr(1920, 2400)], 1920, 2880, DIV, true), { from: 2400, mode: "gap", error: "" });
+});
+
+test("planLeadIn: a target tuplet across selStart is refused", () => {
+    ok(/tuplet/.test(Effects.planLeadIn([vcr(0, 480), vcr(480, 640, false, true), vcr(640, 800, false, true)], 0, 560, DIV, true).error));
+});
+
+test("planTrail: pad to the next CR, to the end of a CR the copy cut into, else to the barline", () => {
+    eq(Effects.planTrail([vcr(0, 960), vcr(960, 1920)], 960, 1920), { to: 960, error: "" });    // next CR starts there
+    eq(Effects.planTrail([vcr(0, 480), vcr(480, 1440), vcr(1440, 1920)], 960, 1920), { to: 1440, error: "" });
+    eq(Effects.planTrail([vcr(0, 480), vcr(1440, 1920)], 960, 1920), { to: 1440, error: "" }); // gap, then a CR
+    eq(Effects.planTrail([], 960, 1920), { to: 1920, error: "" });
+    ok(/tuplet/.test(Effects.planTrail([vcr(800, 960, false, true), vcr(960, 1120, false, true)], 1040, 1920).error));
+});
+
+test("compCuesNotes: beats already comped before selStart are kept (no rewrite from the bar start)", () => {
+    const score = scenario();                 // source: beats 2-4
+    score.staves[1] = [                       // target: an earlier cue on beat 1, rests after
+        { tick: 0, dur: 480, el: Object.assign(chordEl(480, [55], []), { small: true }) },
+        { tick: 480, dur: 1440, el: restEl(1440) },
+    ];
+    const res = Effects.compCuesNotes(makeCtx(score), {
+        selStart: 960, selEnd: 1920, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    eq(res.error, "");
+    const writes = score.ops.filter((o) => o.staff === 1 && (o.op === "rest" || o.op === "chord"));
+    eq(writes[0], { op: "rest", staff: 1, tick: 480, dur: 480, pitches: [] });   // lead-in from the rest's start
+    const head = score.staves[1].find((s) => s.tick === 0);
+    eq([head.el.type, head.el.notes[0].pitch, head.dur], [Element.CHORD, 55, 480]);   // untouched
+});
+
+test("compCuesNotes: a target note spanning selStart is shortened, not overwritten", () => {
+    const score = scenario();                 // source: beats 2-4
+    score.staves[1] = [{ tick: 0, dur: 960, el: chordEl(960, [55], []) }, { tick: 960, dur: 960, el: restEl(960) }];
+    const res = Effects.compCuesNotes(makeCtx(score), {
+        selStart: 480, selEnd: 1920, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    eq(res.error, "");
+    eq(score.ops.find((o) => o.staff === 1), { op: "shorten", staff: 1, tick: 0, dur: 480 });
+    const head = score.staves[1].find((s) => s.tick === 0);
+    eq([head.el.notes[0].pitch, head.dur], [55, 480]);
+    eq(score.staves[1].find((s) => s.tick === 480).el.notes[0].pitch, 60);   // the cue starts on time
+});
+
+test("compCuesNotes: a target tuplet across selStart is refused before anything is written", () => {
+    const score = scenario();
+    score.staves[1] = [   // a target triplet over 1200..1680; the selection starts on beat 4 (1440)
+        { tick: 0, dur: 1200, el: restEl(1200) },
+        ...tupletSegs(1200, 3, 2, 480, [{ nominal: 240 }, { nominal: 240 }, { nominal: 240 }]),
+        { tick: 1680, dur: 240, el: restEl(240) },
+    ];
+    const res = Effects.compCuesNotes(makeCtx(score), {
+        selStart: 1440, selEnd: 1920, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    ok(/tuplet/.test(res.error));
+    eq(score.ops.length, 0);
+});
+
+// --- ties across the selection edge (joining an earlier run's comp) ----------
+
+test("compCuesNotes: a source tie INTO selStart is planned from the previous note (an earlier run's cue)", () => {
+    const score = new FakeScore();
+    score.staves[0] = [   // C | D~ | D | E, quarters; the selection is beats 3-4
+        { tick: 0, dur: 480, el: chordEl(480, [60], []) },
+        { tick: 480, dur: 480, el: chordEl(480, [62], [], [62]) },
+        { tick: 960, dur: 480, el: chordEl(480, [62], []) },
+        { tick: 1440, dur: 480, el: chordEl(480, [64], [], [64]) },
+        { tick: 1920, dur: 480, el: chordEl(480, [64], []) },
+    ];
+    score.staves[1] = [{ tick: 0, dur: WHOLE, el: restEl(WHOLE) }, { tick: WHOLE, dur: WHOLE, el: restEl(WHOLE) }];
+    const res = Effects.compCuesNotes(makeCtx(score), {
+        selStart: 960, selEnd: 1920, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    eq(res.ties.map((t) => [t.tick, t.nextTick, t.pitch, t.mark]), [
+        [480, 960, 62, "cue"],      // into the selection, from the note before it
+        [1440, 1920, 64, "cue"],    // out of it, onto the note after it
+    ]);
+});
+
+test("withEdges: adds the neighbours only where they exist", () => {
+    const a = crAt(0, 480, [60]), b = crAt(480, 480, [62]), c = crAt(960, 480, [64]);
+    eq(Effects.withEdges([b], { before: a, after: c }), [a, b, c]);
+    eq(Effects.withEdges([b], { before: null, after: null }), [b]);
+});
+
+test("compCuesNotes: a 5/8 lead into a target whole note keeps it as a half, then an eighth rest", () => {
+    const score = new FakeScore();
+    score.staves[0] = [{ tick: 1200, dur: 240, el: chordEl(240, [60], []) }];
+    score.staves[1] = [{ tick: 0, dur: WHOLE, el: chordEl(WHOLE, [55], []) }];
+    const res = Effects.compCuesNotes(makeCtx(score), {
+        selStart: 1200, selEnd: 1440, measureTick: 0, srcStaffIdx: 0, targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    eq(res.error, "");
+    const shape = score.staves[1].map((x) => [x.tick, x.dur, x.el.type === Element.CHORD ? x.el.notes[0].pitch : "r"]);
+    eq(shape, [[0, 960, 55], [960, 240, "r"], [1200, 240, 60], [1440, 480, "r"]]);
+});
+
+test("compCuesNotes: a selection running to the END of the score never rewinds past it", () => {
+    // Regression: reading the source note after the selection rewound to selEnd =
+    // lastSegment.tick + 1, which crashes MuseScore (the fake throws likewise).
+    const score = new FakeScore();
+    const last = 3 * WHOLE;   // the last bar
+    score.staves[0] = [{ tick: last, dur: WHOLE, el: chordEl(WHOLE, [60], []) }];
+    score.staves[1] = [{ tick: last, dur: WHOLE, el: restEl(WHOLE) }];
+    const res = Effects.compCuesNotes(makeCtx(score), {
+        selStart: last, selEnd: score.lastSegment.tick + 1, measureTick: last, srcStaffIdx: 0,
+        targets: [{ staffIdx: 1, isDrum: false }],
+    });
+    eq(res.error, "");
+    eq(score.staves[1].find((x) => x.tick === last).el.notes[0].pitch, 60);
 });

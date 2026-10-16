@@ -77,6 +77,8 @@ declare namespace MS {
         nstaves?: number;
         newCursor(): Cursor;
         firstMeasure: Measure | null;
+        /** First measure accounting for multimeasure rests. */
+        firstMeasureMM?: Measure | null;
         lastSegment: Segment;
         /** Wrap a single logical edit; never nest cmd()s inside (see api-gotchas). */
         startCmd(): void;
@@ -122,6 +124,14 @@ declare namespace MS {
         remove(element: any): void;
         /** Nominal time signature of the measure. */
         timesigNominal: { numerator: number; denominator: number; ticks: number };
+        /** Start tick / actual length (Fractions). */
+        tick?: FractionValue;
+        ticks?: FractionValue;
+        repeatStart?: boolean;
+        repeatEnd?: boolean;
+        /** "Exclude from measure count" — set on a pickup bar by the New Score wizard. */
+        excludeFromNumbering?: boolean;
+        nextMeasureMM?: Measure | null;
     }
 
     interface Segment {
@@ -219,6 +229,8 @@ declare namespace MS {
         tieBack?: any;
         /** The tie starting on this note, or null. */
         tieForward?: any;
+        /** The chord holding this note. */
+        parent?: Element | null;
     }
 
     /** An engraved accidental attached to a note. */

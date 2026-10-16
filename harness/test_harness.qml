@@ -81,7 +81,8 @@ MuseScore {
             Accidentals: Accidentals, Accidental: Accidental,
             Segment: Segment, Element: Element, Cursor: Cursor,
             SymId: SymId, LayoutBreak: LayoutBreak, division: division, fraction: fraction,
-            Rests: Rests, removeElement: removeElement,
+            Rests: Rests, removeElement: removeElement, LineBreaks: LineBreaks,
+            BarLineType: BarLineType, MarkerType: MarkerType,
             Direction: Direction, NoteHeadGroup: NoteHeadGroup, Beam: Beam, cmd: cmd
         };
     }
@@ -1243,6 +1244,332 @@ MuseScore {
         H.check(r, "drum cue ties: untied cue note stays untied", !tiedAt(fx.drum, 2, bar9), shape);
     }
 
+    // Comping a bar in PIECES — regression for "partial-bar selections wipe the rest
+    // of the bar and lose the ties between the pieces". The writers used to rewind to
+    // the bar start and write rests up to selStart (wiping the half comped by the
+    // earlier run), and a tie across the selection edge had nothing to land on. Now
+    // each piece leaves the other alone, and a source tie across the edge joins the
+    // earlier piece's comp note. Source: C D~D E~|E (writeTiedSource).
+    function caseCompPartialBars(r) {
+        var src = appendPitched(), cue = appendPitched(), sl = appendPitched(), half = appendPitched();
+        if (src < 0 || cue < 0 || sl < 0 || half < 0) { H.check(r, "partial bars: fixture staves", false, "append failed"); return; }
+        ensureMeasures(2);
+        var m = curScore.firstMeasure;
+        var bar = m.firstSegment.tick, bar2 = m.nextMeasure.firstSegment.tick;
+        writeTiedSource(src, bar);
+        var piece = function (fn, tgt, a, b) {
+            var res = fn({ selStart: a, selEnd: b, measureTick: _barOf(a), srcStaffIdx: src, targets: [tgt] });
+            H.check(r, "partial bars: piece " + a + "-" + b + " no error", res.error === "", res.error || "ok");
+        };
+
+        // Cues: beats 1-2, then beats 3-4, then bar 2 beat 1.
+        piece(cues, { staffIdx: cue, isDrum: false }, bar, bar + 960);
+        piece(cues, { staffIdx: cue, isDrum: false }, bar + 960, bar2);
+        var shape = dumpVoiceN(cue, 0, bar, bar2 + 1920);
+        H.check(r, "partial bars: cue beats 1-2 survive the beats 3-4 run",
+                chordAt(cue, bar) !== null && chordAt(cue, bar + 480) !== null, shape);
+        H.check(r, "partial bars: all 4 cue notes in bar 1", chordCount(bar, bar2, cue * 4) === 4, shape);
+        H.check(r, "partial bars: cue D~D tie joined across the two runs", tiedAt(cue, 0, bar + 480), shape);
+        piece(cues, { staffIdx: cue, isDrum: false }, bar2, bar2 + 480);
+        shape = dumpVoiceN(cue, 0, bar, bar2 + 1920);
+        H.check(r, "partial bars: cue E~E tie joined across the barline", tiedAt(cue, 0, bar + 1440), shape);
+        H.check(r, "partial bars: untied cue notes stay untied", !tiedAt(cue, 0, bar) && !tiedAt(cue, 0, bar + 960), shape);
+
+        // Slashes in REVERSE order: beats 3-4 first, then beats 1-2 (the tie runs OUT
+        // of the second piece into the first).
+        piece(slashes, sl, bar + 960, bar2);
+        piece(slashes, sl, bar, bar + 960);
+        var sshape = dumpVoiceN(sl, 0, bar, bar2);
+        H.check(r, "partial bars: slash beats 3-4 survive the beats 1-2 run", chordCount(bar, bar2, sl * 4) === 4, sshape);
+        H.check(r, "partial bars: slash D~D tie joined (out of the later run)", tiedAt(sl, 0, bar + 480), sshape);
+
+        // A target note across selStart is shortened, not replaced by a rest: a half
+        // note on beat 1, then a cue of beats 2-4.
+        writeVoice(half, 0, bar, [{ note: 960 }]);
+        piece(cues, { staffIdx: half, isDrum: false }, bar + 480, bar2);
+        var hshape = dumpVoiceN(half, 0, bar, bar2);
+        var own = chordAt(half, bar);
+        H.check(r, "partial bars: the target's own note keeps its attack, shortened to a quarter",
+                own && !own.small && own.duration.ticks === 480, hshape);
+        var first = chordAt(half, bar + 480);
+        H.check(r, "partial bars: the cue starts on beat 2", first && first.small && first.notes[0].pitch === 62, hshape);
+        H.check(r, "partial bars: no tie into the target's own note", !tiedAt(half, 0, bar), hshape);
+    }
+    // Start tick of the bar holding `tick`.
+    function _barOf(tick) {
+        var b = curScore.firstMeasure.firstSegment.tick;
+        for (var m = curScore.firstMeasure; m; m = m.nextMeasure)
+            if (m.firstSegment.tick <= tick) b = m.firstSegment.tick;
+        return b;
+    }
+
+    // Drum comp cue in PIECES (bars 10-11) — regression for the drum cue wiping the
+    // rest of the bar: its rest shell started at the barline and was padded to the
+    // next one, so a second run over the other half of the bar erased the first
+    // run's cue notes. Bar 10: beats 3-4 then 1-2; bar 11: beats 1-2 then 3-4.
+    function caseCompCuesNotesDrumPartialBars(r) {
+        var fx = drumCueFixture(r, "drum cue partial bars", "drum cue partial bars: source staff", 11);
+        if (!fx) return;
+        var voice = 2;
+        var bars = [measureN(10).firstSegment.tick, measureN(11).firstSegment.tick];
+        for (var i = 0; i < 2; ++i) {
+            var b = bars[i];
+            writeVoice(fx.src, 0, b, [{ note: 480 }, { note: 480 }, { note: 480 }, { note: 480 }]);
+            var order = i === 0 ? [[b + 960, b + 1920], [b, b + 960]] : [[b, b + 960], [b + 960, b + 1920]];
+            for (var k = 0; k < 2; ++k)
+                runDrumCue(r, "drum cue partial bars " + (10 + i) + "." + (k + 1),
+                           { drum: fx.drum, src: fx.src, selStart: order[k][0], selEnd: order[k][1], measureTick: b });
+            var shape = dumpVoiceN(fx.drum, voice, b, b + 1920);
+            H.check(r, "drum cue partial bars: bar " + (10 + i) + " keeps all 4 cue notes",
+                    chordCount(b, b + 1920, fx.drum * 4 + voice) === 4, shape);
+            var clean = true;
+            for (var q = 0; q < 4; ++q) {
+                var ch = chordAtVoice(fx.drum, voice, b + q * 480);
+                if (!ch || ch.duration.ticks !== 480) clean = false;
+            }
+            H.check(r, "drum cue partial bars: bar " + (10 + i) + " cues are clean quarters", clean, shape);
+        }
+    }
+
+    // Write chords into voice 1 of staffIdx from barTick: each item is an array of
+    // pitches (a quarter chord) or a number (a rest of that many ticks).
+    function writeChords(staffIdx, barTick, items) {
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = staffIdx; c.voice = 0; c.rewindToTick(barTick);
+        for (var i = 0; i < items.length; ++i) {
+            var it = items[i];
+            if (typeof it === "number") {
+                var f = Effects.ticksToFraction(it, division);
+                c.setDuration(f.z, f.n); c.addRest(); continue;
+            }
+            c.setDuration(1, 4);
+            c.addNote(it[0]);
+            for (var k = 1; k < it.length; ++k) c.addNote(it[k], true);
+        }
+        curScore.endCmd();
+    }
+    // The note of `pitch` in the chord at (staffIdx, voice, tick), or null.
+    function noteOf(staffIdx, voice, tick, pitch) {
+        var ch = chordAtVoice(staffIdx, voice, tick);
+        var notes = ch ? ch.notes : [];
+        for (var i = 0; i < notes.length; ++i) if (notes[i].pitch === pitch) return notes[i];
+        return null;
+    }
+
+    // Running the SAME comp twice must give the same result: the second run
+    // overwrites the first (dropping its ties), and the ties are made again — not
+    // toggled off (cmd("tie") on an already-tied note removes the tie).
+    function caseCompRerun(r) {
+        var src = appendPitched(), cue = appendPitched(), sl = appendPitched();
+        if (src < 0 || cue < 0 || sl < 0) { H.check(r, "rerun: fixture staves", false, "append failed"); return; }
+        ensureMeasures(2);
+        var bar = curScore.firstMeasure.firstSegment.tick;
+        writeTiedSource(src, bar);
+        for (var run = 0; run < 2; ++run) {
+            var a = cues({ selStart: bar, selEnd: bar + 2400, measureTick: bar, srcStaffIdx: src,
+                           targets: [{ staffIdx: cue, isDrum: false }] });
+            var b = slashes({ selStart: bar, selEnd: bar + 2400, measureTick: bar, srcStaffIdx: src, targets: [sl] });
+            H.check(r, "rerun: run " + (run + 1) + " no errors", a.error === "" && b.error === "", a.error + b.error || "ok");
+        }
+        var shape = dumpVoiceN(cue, 0, bar, bar + 3840), sshape = dumpVoiceN(sl, 0, bar, bar + 3840);
+        H.check(r, "rerun: cue ties still there", tiedAt(cue, 0, bar + 480) && tiedAt(cue, 0, bar + 1440)
+                && !tiedAt(cue, 0, bar) && !tiedAt(cue, 0, bar + 960), shape);
+        H.check(r, "rerun: slash ties still there", tiedAt(sl, 0, bar + 480) && tiedAt(sl, 0, bar + 1440)
+                && !tiedAt(sl, 0, bar) && !tiedAt(sl, 0, bar + 960), sshape);
+        H.check(r, "rerun: no extra notes", chordCount(bar, bar + 3840, cue * 4) === 5
+                && chordCount(bar, bar + 3840, sl * 4) === 5, shape + " / " + sshape);
+    }
+
+    // A target note across selStart whose head length isn't ONE note value (5/8):
+    // it is cut to the longest value that fits (a half) and rests follow, instead of
+    // the note being overwritten. Target: a whole note; the cue starts at 1200.
+    function caseCompShortenFallback(r) {
+        var src = appendPitched(), tgt = appendPitched();
+        if (src < 0 || tgt < 0) { H.check(r, "shorten 5/8: fixture staves", false, "append failed"); return; }
+        ensureMeasures(1);
+        var bar = curScore.firstMeasure.firstSegment.tick;
+        writeChords(src, bar, [960, 240, [62]]);
+        writeVoice(tgt, 0, bar, [{ note: 1920 }]);
+        var res = cues({ selStart: bar + 1200, selEnd: bar + 1440, measureTick: bar, srcStaffIdx: src,
+                         targets: [{ staffIdx: tgt, isDrum: false }] });
+        var shape = dumpVoiceN(tgt, 0, bar, bar + 1920);
+        H.check(r, "shorten 5/8: no error", res.error === "", res.error || "ok");
+        var own = chordAt(tgt, bar);
+        H.check(r, "shorten 5/8: the target note is kept as a half", own && !own.small && own.duration.ticks === 960, shape);
+        var gap = segmentAt(bar + 960) ? segmentAt(bar + 960).elementAt(tgt * 4) : null;
+        H.check(r, "shorten 5/8: an eighth rest up to the cue", gap && gap.type === Element.REST && gap.duration.ticks === 240, shape);
+        var cue = chordAt(tgt, bar + 1200);
+        H.check(r, "shorten 5/8: the cue lands at selStart", cue && cue.small && cue.notes[0].pitch === 62, shape);
+    }
+
+    // A target TUPLET across selStart: refused before anything is written (plain
+    // writes can't split a tuplet). Target triplet on beat 2; the cue starts on the
+    // 4th eighth, inside its 2nd member.
+    function caseCompTargetTuplet(r) {
+        var src = appendPitched(), tgt = appendPitched();
+        if (src < 0 || tgt < 0) { H.check(r, "target tuplet: fixture staves", false, "append failed"); return; }
+        ensureMeasures(1);
+        var m = curScore.firstMeasure, bar = m.firstSegment.tick;
+        var bar2 = m.nextMeasure ? m.nextMeasure.firstSegment.tick : curScore.lastSegment.tick + 1;
+        writeVoice(src, 0, bar, [{ note: 240 }, { note: 240 }, { note: 240 }, { note: 240 },
+                                 { note: 240 }, { note: 240 }, { note: 240 }, { note: 240 }]);
+        writeTripletBar(tgt, bar);
+        var before = dumpVoiceN(tgt, 0, bar, bar2);
+        var res = cues({ selStart: bar + 720, selEnd: bar2, measureTick: bar, srcStaffIdx: src,
+                         targets: [{ staffIdx: tgt, isDrum: false }] });
+        H.check(r, "target tuplet: refused with a message", /tuplet/i.test(res.error), res.error || "no error");
+        var after = dumpVoiceN(tgt, 0, bar, bar2);
+        H.check(r, "target tuplet: target untouched", before === after, "before [" + before + "] after [" + after + "]");
+    }
+
+    // Ties on CHORDS, across two runs: C+E on beat 1, only C tied into the C+G of
+    // beat 2. The edge tie joins C only; E stays untied.
+    function caseCompChordTies(r) {
+        var src = appendPitched(), cue = appendPitched();
+        if (src < 0 || cue < 0) { H.check(r, "chord ties: fixture staves", false, "append failed"); return; }
+        ensureMeasures(1);
+        var bar = curScore.firstMeasure.firstSegment.tick;
+        writeChords(src, bar, [[60, 64], [60, 67], 960]);
+        curScore.selection.clear();
+        curScore.selection.select(noteOf(src, 0, bar, 60));
+        cmd("tie");
+        H.check(r, "chord ties: fixture C tied, E not", !!(noteOf(src, 0, bar, 60) && noteOf(src, 0, bar, 60).tieForward)
+                && !(noteOf(src, 0, bar, 64) && noteOf(src, 0, bar, 64).tieForward), dumpVoiceN(src, 0, bar, bar + 1920));
+        cues({ selStart: bar, selEnd: bar + 480, measureTick: bar, srcStaffIdx: src, targets: [{ staffIdx: cue, isDrum: false }] });
+        var res = cues({ selStart: bar + 480, selEnd: bar + 1920, measureTick: bar, srcStaffIdx: src,
+                         targets: [{ staffIdx: cue, isDrum: false }] });
+        H.check(r, "chord ties: no error", res.error === "", res.error || "ok");
+        var c = noteOf(cue, 0, bar, 60), e = noteOf(cue, 0, bar, 64);
+        var shape = dumpVoiceN(cue, 0, bar, bar + 1920);
+        H.check(r, "chord ties: cue C tied across the two runs", !!(c && c.tieForward), shape);
+        H.check(r, "chord ties: cue E left untied", !!e && !e.tieForward, shape);
+        H.check(r, "chord ties: both cue chords complete", chordAt(cue, bar) && chordAt(cue, bar).notes.length === 2
+                && chordAt(cue, bar + 480) && chordAt(cue, bar + 480).notes.length === 2, shape);
+    }
+
+    // A PIANO (two staves) target: the cue goes into the top staff, and the tie pass
+    // touches only that staff even when the bottom staff has the same pitches tied-
+    // able at the same ticks.
+    function caseCompPianoTarget(r) {
+        var src = appendPitched();
+        var before = JazzKit.countStaves(curScore);
+        curScore.startCmd(); curScore.appendPart("piano"); curScore.endCmd();
+        if (src < 0 || JazzKit.countStaves(curScore) !== before + 2) {
+            H.skip(r, "piano target", "couldn't add a two-staff piano (" + (JazzKit.countStaves(curScore) - before) + " staves)");
+            return;
+        }
+        var top = before, bottom = before + 1;
+        ensureMeasures(2);
+        var bar = curScore.firstMeasure.firstSegment.tick;
+        writeTiedSource(src, bar);
+        writeChords(bottom, bar, [[62], [62], [62], [62]]);
+        var res = cues({ selStart: bar, selEnd: bar + 2400, measureTick: bar, srcStaffIdx: src,
+                         targets: [{ staffIdx: top, isDrum: false }] });
+        H.check(r, "piano target: no error", res.error === "", res.error || "ok");
+        H.check(r, "piano target: cue in the top staff", chordCount(bar, bar + 2400, top * 4) === 5, dumpVoiceN(top, 0, bar, bar + 3840));
+        var bshape = dumpVoiceN(bottom, 0, bar, bar + 1920);
+        H.check(r, "piano target: bottom staff untouched (4 plain quarters, none tied)",
+                chordCount(bar, bar + 1920, bottom * 4) === 4 && !tiedAt(bottom, 0, bar + 480) && !tiedAt(bottom, 0, bar), bshape);
+        H.check(r, "piano target: top-staff tie made", tiedAt(top, 0, bar + 480), dumpVoiceN(top, 0, bar, bar + 3840));
+    }
+
+    // Drum cue into a voice 3 the USER filled with a gap (a quarter rest on beat 1,
+    // nothing after): the lead-in starts where that content stops and fills the gap,
+    // so the bar ends up tiled and beat 1 is kept. Bar 12.
+    function caseCompCuesNotesDrumGappyVoice(r) {
+        var fx = drumCueFixture(r, "drum cue gappy voice", "drum cue gappy voice: source staff", 12);
+        if (!fx) return;
+        var b = measureN(12).firstSegment.tick, v = 2;
+        writeVoice(fx.src, 0, b, [{ note: 480 }, { note: 480 }, { note: 480 }, { note: 480 }]);
+        writeVoice(fx.drum, v, b, [480]);
+        runDrumCue(r, "drum cue gappy voice", { drum: fx.drum, src: fx.src, selStart: b + 960, selEnd: b + 1920, measureTick: b });
+        var shape = dumpVoiceN(fx.drum, v, b, b + 1920);
+        H.check(r, "drum cue gappy voice: 2 cue notes on beats 3-4", chordCount(b + 960, b + 1920, fx.drum * 4 + v) === 2
+                && chordAtVoice(fx.drum, v, b + 960) !== null, shape);
+        var keep = segmentAt(b).elementAt(fx.drum * 4 + v);
+        H.check(r, "drum cue gappy voice: the user's beat-1 rest kept", keep && keep.type === Element.REST && keep.duration.ticks === 480, shape);
+        var fill = segmentAt(b + 480) ? segmentAt(b + 480).elementAt(fx.drum * 4 + v) : null;
+        H.check(r, "drum cue gappy voice: the gap on beat 2 filled", fill && fill.type === Element.REST && fill.duration.ticks === 480, shape);
+    }
+
+    // A comp across a TIME-SIGNATURE change that runs to the END OF THE SCORE: two
+    // fresh bars at the end — A in the time signature in force there (the rest
+    // oracle leaves 2/4), B changed to 3/4 — and a selection from A's beat 2 to the
+    // end. Pitched cue and drum cue; B must be filled to ITS length. (Only B's
+    // signature is changed: changing A's too re-bars the appended bars.)
+    function caseCompTimeSigToEnd(r) {
+        var drum = findDrumStaff();
+        var src = appendPitched(), tgt = appendPitched();
+        if (src < 0 || tgt < 0) { H.check(r, "timesig to end: fixture staves", false, "append failed"); return; }
+        var first = measureCount() + 1;
+        curScore.startCmd(); curScore.appendMeasures(2); curScore.endCmd();
+        curScore.startCmd();
+        var tc = curScore.newCursor();
+        tc.staffIdx = 0; tc.voice = 0; tc.rewindToTick(measureN(first + 1).firstSegment.tick);
+        var ts = newElement(Element.TIMESIG); ts.timesig = fraction(3, 4); tc.add(ts);
+        curScore.endCmd();
+        var A = measureN(first), B = A ? A.nextMeasure : null;
+        var okFx = A && B && !B.nextMeasure && B.timesigNominal.ticks === 1440 && A.timesigNominal.ticks !== 1440;
+        H.check(r, "timesig to end: fixture is two bars, the last one 3/4", okFx,
+                A && B ? "A=" + A.timesigNominal.ticks + " B=" + B.timesigNominal.ticks + " last=" + !B.nextMeasure : "bars missing");
+        if (!okFx) return;
+        var a = A.firstSegment.tick, b = B.firstSegment.tick, aLen = A.timesigNominal.ticks, end = b + 1440;
+        var q = function (n) { var x = []; for (var k = 0; k < n; ++k) x.push({ note: 480 }); return x; };
+        writeVoice(src, 0, a, q(aLen / 480));
+        writeVoice(src, 0, b, q(3));
+        var want = aLen / 480 - 1 + 3;
+        H.check(r, "timesig to end: source as written", chordCount(a, end, src * 4) === aLen / 480 + 3, dumpVoiceN(src, 0, a, end));
+        var targets = [{ staffIdx: tgt, isDrum: false }];
+        if (drum >= 0) targets.push({ staffIdx: drum, isDrum: true });
+        var res = cues({ selStart: a + 480, selEnd: curScore.lastSegment.tick + 1, measureTick: a, srcStaffIdx: src, targets: targets });
+        H.check(r, "timesig to end: no error", res.error === "", res.error || "ok");
+        H.check(r, "timesig to end: every selected note cued, none before beat 2", chordCount(a + 480, end, tgt * 4) === want
+                && chordCount(a, a + 480, tgt * 4) === 0, dumpVoiceN(tgt, 0, a, end));
+        if (drum >= 0) {
+            var dshape = dumpVoiceN(drum, 2, a, end);
+            H.check(r, "timesig to end: drum cue notes too", chordCount(a, end, drum * 4 + 2) === want, dshape);
+            var lastCue = chordAtVoice(drum, 2, b + 960);
+            H.check(r, "timesig to end: drum 3/4 bar ends on its own barline",
+                    lastCue && lastCue.duration.ticks === 480 && !segmentAt(end), dshape);
+        }
+    }
+
+    // Line breaks read off a REAL score (readLineBoxes): a rehearsal mark on bar 7, a
+    // coda sign on bar 10 and an end-repeat on bar 4 come through as box facts, and
+    // the plan breaks before the mark and the coda.
+    function caseLineBreakMarks(r) {
+        ensureMeasures(12);
+        var ms = [];
+        for (var m = curScore.firstMeasure; m && ms.length < 12; m = m.nextMeasure) ms.push(m);
+        curScore.startCmd();
+        var c = curScore.newCursor();
+        c.staffIdx = 0; c.voice = 0; c.rewindToTick(ms[6].firstSegment.tick);
+        var rm = newElement(Element.REHEARSAL_MARK); c.add(rm); rm.text = "B";
+        c.rewindToTick(ms[9].firstSegment.tick);
+        var mk = newElement(Element.MARKER); c.add(mk); mk.markerType = MarkerType.CODA;   // after add, like text
+        ms[3].repeatEnd = true;
+        curScore.endCmd();
+
+        var read = Effects.readLineBoxes(effectCtx(), ms);
+        var bx = read.boxes;
+        H.check(r, "lineBreak marks: one box per bar (no multirests)", bx.length === 12, "boxes=" + bx.length);
+        H.check(r, "lineBreak marks: rehearsal mark read on bar 7 only", bx[6] && bx[6].rehearsal
+                && bx.filter(function (x) { return x.rehearsal; }).length === 1, JSON.stringify(bx.map(function (x) { return x.rehearsal ? 1 : 0; })));
+        H.check(r, "lineBreak marks: coda sign read on bar 10 only", bx[9] && bx[9].coda
+                && bx.filter(function (x) { return x.coda; }).length === 1, JSON.stringify(bx.map(function (x) { return x.coda ? 1 : 0; })));
+        H.check(r, "lineBreak marks: end-repeat read on bar 4", bx[3] && bx[3].repeatEnd, "repeatEnd=" + (bx[3] && bx[3].repeatEnd));
+        H.check(r, "lineBreak marks: a full first bar is no pickup", bx[0] && !bx[0].pickup, "pickup=" + (bx[0] && bx[0].pickup));
+        var idxs = LineBreaks.computeBreaks(bx, { atDouble: true, atRepeats: true, everyN: 0, minBars: 1, maxBars: 0 });
+        H.check(r, "lineBreak marks: breaks after the repeat and before the mark and the coda",
+                JSON.stringify(idxs) === "[3,5,8]", JSON.stringify(idxs));
+        var breaks = [];
+        for (var j = 0; j < idxs.length; ++j) breaks.push(read.last[idxs[j]]);
+        var res = Effects.applyLineBreaks(effectCtx(), ms, breaks);
+        H.check(r, "lineBreak marks: applied", res.added === 3 && countLayoutBreaks(ms) === 3, "added=" + res.added);
+        curScore.startCmd(); ms[3].repeatEnd = false; curScore.endCmd();   // leave the fixture plain for later sweeps
+    }
+
     // ---- rests (Autofix: groupRests / fullBarRests) --------------------------
 
     // Lengths of the rests in one voice across [from, to), in order ("|"-joined), or
@@ -1595,6 +1922,8 @@ MuseScore {
         caseCompCuesNotesDrumMultiBar(r);
         caseCompCuesNotesDrumOverGroove(r);
         caseCompTiesDrum(r);
+        caseCompCuesNotesDrumPartialBars(r);
+        caseCompCuesNotesDrumGappyVoice(r);
         // Runs AFTER the drum-cue cases on purpose: it appends a staff, and doing so
         // before the drum cue perturbs that effect's (changeCRlen-sensitive) layout and
         // corrupts its bar. Kept last so the drum cue writes in its normal context; this
@@ -1606,7 +1935,14 @@ MuseScore {
         caseFillEmptyBeatsTupletRests(r);
         caseCompTies(r);
         caseCompTiesOutOfRange(r);
+        caseCompPartialBars(r);
+        caseCompRerun(r);
+        caseCompShortenFallback(r);
+        caseCompTargetTuplet(r);
+        caseCompChordTies(r);
+        caseCompPianoTarget(r);
         caseLineBreaks(r);
+        caseLineBreakMarks(r);
         // Last: these run over the WHOLE score, so let every other fixture exist
         // (and be asserted) first — that also makes them a sweep over everything the
         // other cases wrote.
@@ -1616,6 +1952,7 @@ MuseScore {
         // Rest fixes last: they sweep the WHOLE score (every fixture above included),
         // and the oracle appends time-signature changes at the end.
         caseRestOracle(r);
+        caseCompTimeSigToEnd(r);
         caseGroupRests(r);
         caseFullBarRests(r);
         caseGroupNotes(r);

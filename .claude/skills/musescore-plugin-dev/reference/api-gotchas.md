@@ -301,6 +301,12 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   (`visible = false`); per chord `stemDirection = Direction.DOWN`, and for the
   stemless beat-fill also `noStem = true` + `beamMode = Beam.NONE`. See
   `JazzKit/lib/effects.js` `_applySlashChord`.
+- **`rewindToTick(t)` at or past the final barline CRASHES MuseScore.** It looks
+  up `tick2leftSegment(t + 1)`, which returns null past the last measure
+  (`dom/utils.cpp`), and `Cursor::rewindToTick` dereferences it unchecked
+  (`api/v1/cursor.cpp`). A selection running to the end of the score has
+  `selEnd = lastSegment.tick + 1` — never rewind to it. Verified (crash dump) via the
+  harness; `effects.js` `_cursorAt` guards every rewind.
 - **`rewindToTick(t)` on an EMPTY target skips FORWARD, not to the measure start.**
   `rewindToTick` = `tick2leftSegment(); nextInTrack()`, and `nextInTrack` advances
   past any segment with no element in the current track. A full-measure rest's only
@@ -310,6 +316,18 @@ Verified this session by running `mscore --test-case <script.js>` and reading th
   **Fix: `rewindToTick(measureTick)`** (the measure start always has a target
   rest) **then write a leading rest up to `selStart`** — that positions AND splits
   the rest. See `effects.js` `_writeCueInto` / `_writeSlashRhythmInto`.
+- **Shortening a placed chord: `chord.duration = fraction(z, n)`** (→
+  `Score::changeCRlen`, shorter branch, `editing/cmd.cpp`) keeps the chord's attack,
+  drops its `tieFor`, and rest-fills the remainder — in voices 2-4 too. Only for a
+  length that is ONE value (plain or dotted): it builds `toDurationList(dstF)`, sets
+  the chord to the first piece, rests the others, then fills `srcF - dstF` from the
+  chord's NEW end — so a two-piece length (5/8) overlaps itself. JazzKit uses it to
+  make a partial-bar comp start at selStart without wiping the target note that
+  spans it (`effects.js` `planLeadIn` / `_leadCursor`).
+- **Voltas are readable, not creatable.** They live in the score's spanner map, so
+  `curScore.spanners` lists them (`type === Element.VOLTA`); `spannerTick` /
+  `spannerTicks` read as Fractions (`.ticks`) giving the measure span. There's no
+  `cursor.add` branch for a spanner, so a plugin (or the harness) can't build one.
 - **`cursor.setDuration(z, n)` silently TRUNCATES a length no single note value
   spells.** It builds `TDuration(Fraction)`, which (release build) rounds down to
   the longest value that fits: `setDuration(5, 8)` → a half. A gap-filling rest
