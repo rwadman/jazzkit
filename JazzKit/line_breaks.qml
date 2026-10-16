@@ -53,19 +53,6 @@ MuseScore {
     function mStart(m) { return m.tick.ticks; }
     function mEnd(m)   { return m.tick.ticks + m.ticks.ticks; }
 
-    function endsWithDoubleBarline(m) {
-        var seg = m.firstSegment;
-        while (seg) {
-            if (seg.segmentType === Segment.EndBarLine) {
-                var bl = seg.elementAt(0);
-                if (bl && bl.type === Element.BAR_LINE && bl.barlineType === BarLineType.DOUBLE)
-                    return true;
-            }
-            seg = seg.nextInMeasure;
-        }
-        return false;
-    }
-
     function collectMeasures() {
         var sel = curScore.selection;
         var startTick = -1, endTick = -1;
@@ -85,49 +72,12 @@ MuseScore {
         return arr;
     }
 
-    function buildBoxes(measures) {
-        var starts = {};
-        var hasStarts = false;
-        var mm = curScore.firstMeasureMM;
-        while (mm) { starts[mm.tick.ticks] = true; hasStarts = true; mm = mm.nextMeasureMM; }
-
-        var ticks = [];
-        for (var i = 0; i < measures.length; ++i) ticks.push(measures[i].tick.ticks);
-
-        var groups = LineBreaks.groupBoxes(ticks, hasStarts ? starts : null);
-        var boxes = [];
-        for (var g = 0; g < groups.length; ++g) {
-            boxes.push({
-                first: measures[groups[g].firstIdx],
-                last: measures[groups[g].lastIdx],
-                musicBars: groups[g].musicBars
-            });
-        }
-        return boxes;
-    }
-
-    function computeBoxBreaks(boxes, opts) {
-        var data = [];
-        for (var i = 0; i < boxes.length; ++i) {
-            var b = boxes[i];
-            data.push({
-                musicBars:   b.musicBars,
-                endsDouble:  endsWithDoubleBarline(b.last),
-                repeatEnd:   !!b.last.repeatEnd,
-                repeatStart: !!b.first.repeatStart
-            });
-        }
-        var idxs = LineBreaks.computeBreaks(data, opts);
-        var res = [];
-        for (var j = 0; j < idxs.length; ++j) res.push(boxes[idxs[j]].last);
-        return res;
-    }
-
     // ---- apply -----------------------------------------------------------------
     function effectCtx() {
         return {
-            curScore: curScore, newElement: newElement,
-            Element: Element, LayoutBreak: LayoutBreak
+            curScore: curScore, newElement: newElement, LineBreaks: LineBreaks,
+            Element: Element, Segment: Segment, LayoutBreak: LayoutBreak,
+            BarLineType: BarLineType, MarkerType: MarkerType
         };
     }
 
@@ -144,8 +94,10 @@ MuseScore {
             minBars:   Math.max(1, valMinBars),
             maxBars:   valMaxBars
         };
-        var boxes = buildBoxes(measures);
-        var breakMeasures = computeBoxBreaks(boxes, opts);
+        var read = Effects.readLineBoxes(effectCtx(), measures);
+        var idxs = LineBreaks.computeBreaks(read.boxes, opts);
+        var breakMeasures = [];
+        for (var j = 0; j < idxs.length; ++j) breakMeasures.push(read.last[idxs[j]]);
 
         saveSettings();
         var res = Effects.applyLineBreaks(effectCtx(), measures, breakMeasures);
@@ -176,12 +128,12 @@ MuseScore {
             spacing: 12
 
             CheckBox {
-                text: qsTr("Line break at double barlines")
+                text: qsTr("Line break at double barlines and rehearsal marks")
                 checked: root.optDouble
                 onClicked: root.optDouble = !root.optDouble
             }
             CheckBox {
-                text: qsTr("Line break at repeats")
+                text: qsTr("Line break at repeats and codas")
                 checked: root.optRepeats
                 onClicked: root.optRepeats = !root.optRepeats
             }

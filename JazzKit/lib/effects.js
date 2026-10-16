@@ -36,6 +36,8 @@
  * @property {JK.QmlEnum} Beam         QML Beam enum (beam mode)
  * @property {MS.SymId} SymId          QML SymId enum
  * @property {JK.QmlEnum} [BarLineType]  QML BarLineType enum
+ * @property {JK.QmlEnum} [MarkerType]   QML MarkerType enum (CODA, …)
+ * @property {JK.LineBreaksLib} [LineBreaks]  linebreaks.js (groupBoxes, voltaFlags — pure)
  * @property {JK.QmlEnum} LayoutBreak  QML LayoutBreak enum
  * @property {JK.QmlEnum} Accidental   QML Accidental enum (NONE, FLAT, NATURAL, SHARP, …)
  * @property {(code:string)=>void} [cmd]  QML cmd() — used ONLY for the tie pass
@@ -74,7 +76,10 @@
  * What _readSource hands the writers: the source CRs and the range they cover.
  * The range can be WIDER than the selection — a tuplet is copied whole or not at
  * all, so a selection that starts or ends inside one is widened to its bounds.
- * @typedef {{crs:SourceCR[], selStart:number, selEnd:number, error:string}} SourceRead
+ * `before`/`after` are the source CRs just outside that range (not copied; they
+ * carry ties across its edges — see _sourceNeighbours).
+ * @typedef {{crs:SourceCR[], selStart:number, selEnd:number,
+ *            before:SourceCR|null, after:SourceCR|null, error:string}} SourceRead
  */
 
 /**
@@ -101,9 +106,10 @@ function _trySet(obj, key, value) {
 }
 
 /**
- * A fresh cursor parked on (staffIdx, voice) at `tick`. The track MUST be set
- * before the rewind (api-gotchas) — rewinding first and assigning staffIdx after
- * leaves the cursor on the old track.
+ * A fresh cursor parked on (staffIdx, voice) at `tick` — or, at/past the end of
+ * the score, one with no segment. The track MUST be set before the rewind
+ * (api-gotchas) — rewinding first and assigning staffIdx after leaves the cursor
+ * on the old track.
  * @param {EffectCtx} ctx  needs curScore
  * @param {number} staffIdx
  * @param {number} voice   0-indexed (UI voice 1 = 0)
@@ -114,6 +120,11 @@ function _cursorAt(ctx, staffIdx, voice, tick) {
     var cur = ctx.curScore.newCursor();
     cur.staffIdx = staffIdx;
     cur.voice = voice;
+    // rewindToTick CRASHES at or past the final barline (tick2leftSegment returns
+    // null and Cursor::rewindToTick dereferences it) — e.g. the end of a selection
+    // running to the end of the score. A fresh cursor has no segment: callers
+    // already treat that as "nothing there".
+    if (tick >= ctx.curScore.lastSegment.tick) return cur;
     cur.rewindToTick(tick);
     return cur;
 }
@@ -238,6 +249,65 @@ function _tupletInfo(el, fallbackTick) {
 }
 
 /**
+ * The chord/rest under `cursor` as a SourceCR (see the typedef).
+ * @param {EffectCtx} ctx  needs Element
+ * @param {MS.Cursor} cursor
+ * @param {number} track
+ * @returns {SourceCR}
+ */
+function _sourceCR(ctx, cursor, track) {
+    var el = /** @type {MS.Element} */ (cursor.element);   // callers check it
+    /** @type {SourceCR} */
+    var item = {
+        tick: cursor.tick,   // absolute start tick (for tick-aligned pass 2)
+        num: el.duration.numerator, den: el.duration.denominator,
+        ticks: _actualTicks(el), tuplet: _tupletInfo(el, cursor.tick),
+        isRest: el.type === ctx.Element.REST, pitches: [], ties: [], accents: [],
+        fermatas: _readFermatas(ctx, cursor.segment, track)
+    };
+    if (el.type === ctx.Element.CHORD) {
+        var notes = el.notes || [];
+        for (var i = 0; i < notes.length; ++i) {
+            item.pitches.push(notes[i].pitch);
+            if (notes[i].tieForward) item.ties.push(notes[i].pitch);
+        }
+        var arts = el.articulations || [];
+        for (var j = 0; j < arts.length; ++j) {
+            var sym = arts[j].symbol;
+            if (sym !== undefined) item.accents.push(sym);   // nothing to reproduce
+        }
+    }
+    return item;
+}
+
+/**
+ * The source CRs just OUTSIDE [start, end): the one ending at `start` and the one
+ * starting at `end` (null where there is none). Not copied — they only let a tie
+ * across the selection edge join a comp written by an EARLIER run over the
+ * neighbouring bars (see _tiePlans).
+ * @param {EffectCtx} ctx  needs curScore, Element
+ * @param {number} srcStaffIdx @param {number} start @param {number} end
+ * @returns {{before:SourceCR|null, after:SourceCR|null}}
+ */
+function _sourceNeighbours(ctx, srcStaffIdx, start, end) {
+    var track = srcStaffIdx * 4;
+    /** @type {SourceCR|null} */
+    var before = null;
+    var pm = start > 0 ? _measureAt(ctx, start - 1) : null;
+    if (pm && pm.firstSegment) {
+        var c = _cursorAt(ctx, srcStaffIdx, 0, pm.firstSegment.tick);
+        while (c.segment && c.tick < start) {
+            if (c.element && c.element.duration && c.tick + _actualTicks(c.element) === start)
+                before = _sourceCR(ctx, c, track);
+            c.next();
+        }
+    }
+    var a = _cursorAt(ctx, srcStaffIdx, 0, end);
+    var after = (a.segment && a.tick === end && a.element && a.element.duration) ? _sourceCR(ctx, a, track) : null;
+    return { before: before, after: after };
+}
+
+/**
  * Read the source voice-1 chord/rests across [selStart, selEnd) as plain data.
  * `accents` are the chord's articulations (staccato, tenuto, accent, …);
  * `fermatas` are the segment's, read for rests too. A tuplet cut by either end of
@@ -265,34 +335,16 @@ function _readSource(ctx, selStart, selEnd, srcStaffIdx) {
         var el = cursor.element;
         if (el && el.duration) {
             if (el.tuplet && el.tuplet.tuplet)
-                return { crs: [], selStart: start, selEnd: end, error: NESTED_TUPLET_ERROR };
-            var tup = _tupletInfo(el, cursor.tick);
+                return { crs: [], selStart: start, selEnd: end, before: null, after: null, error: NESTED_TUPLET_ERROR };
+            var item = _sourceCR(ctx, cursor, track);
+            var tup = item.tuplet;
             if (tup && tup.start + tup.ticks > end) end = tup.start + tup.ticks;   // ends mid-tuplet
-            /** @type {SourceCR} */
-            var item = {
-                tick: cursor.tick,   // absolute start tick (for tick-aligned pass 2)
-                num: el.duration.numerator, den: el.duration.denominator,
-                ticks: _actualTicks(el), tuplet: tup,
-                isRest: el.type === ctx.Element.REST, pitches: [], ties: [], accents: [],
-                fermatas: _readFermatas(ctx, cursor.segment, track)
-            };
-            if (el.type === ctx.Element.CHORD) {
-                var notes = el.notes || [];
-                for (var i = 0; i < notes.length; ++i) {
-                    item.pitches.push(notes[i].pitch);
-                    if (notes[i].tieForward) item.ties.push(notes[i].pitch);
-                }
-                var arts = el.articulations || [];
-                for (var j = 0; j < arts.length; ++j) {
-                    var sym = arts[j].symbol;
-                    if (sym !== undefined) item.accents.push(sym);   // nothing to reproduce
-                }
-            }
             out.push(item);
         }
         cursor.next();
     }
-    return { crs: out, selStart: start, selEnd: end, error: "" };
+    var nb = _sourceNeighbours(ctx, srcStaffIdx, start, end);
+    return { crs: out, selStart: start, selEnd: end, before: nb.before, after: nb.after, error: "" };
 }
 
 /**
@@ -383,7 +435,7 @@ function splitRestTicks(ticks, division) {
 
 /**
  * Write rests covering `ticks` from the cursor (see splitRestTicks; a leftover
- * is refused up front by _readCheckedSource, never written).
+ * is refused up front by _readAndPlan, never written).
  * @param {EffectCtx} ctx  needs division
  * @param {MS.Cursor} cur
  * @param {number} ticks
@@ -400,26 +452,230 @@ function _addRestTicks(ctx, cur, ticks) {
 
 var ALIGN_ERROR = "Couldn't line the copy up with the source (unsupported rhythm before the selection).";
 var FRACTION_ERROR = "Copying tuplets needs MuseScore's fraction() — not available here.";
+var TARGET_TUPLET_ERROR = "A target staff has a tuplet across the start or end of the selection. Select up to the tuplet's edge, or clear it first.";
+
+// --- partial bars: where a write starts and ends in the target --------------
+// A selection need not cover whole bars, and the target bar may already hold
+// something outside it — typically the comp of the bar's OTHER half, written by an
+// earlier run. A writer must change nothing outside the copied range. It used to
+// rewind to the MEASURE start and write rests up to selStart (wiping beats already
+// comped there), and the drum cue padded with rests to the barline (wiping the
+// rest of the bar). Instead, per target voice:
+//  - lead-in: start at the target CR that covers selStart. A CR starting exactly
+//    there needs nothing; a rest is overwritten by rests up to selStart; a chord is
+//    SHORTENED to end at selStart (chord.duration → Score::changeCRlen, which
+//    rest-fills the remainder) so its attack survives. A voice with a GAP there
+//    (voices 2-4 aren't auto-filled) is filled from the end of its last CR.
+//  - trailing pad (voices 2-4 only — MuseScore re-fills voice 1 itself): rests
+//    from the end of the copy up to the next target CR, or to the end of a CR the
+//    copy cut into, or to the barline — never over a CR the copy didn't touch.
+// A target tuplet across either edge can't be split by plain writes: refused.
 
 /**
- * Read the source and refuse, BEFORE anything is written, whatever the writers
- * could only get half right: an empty selection, a nested tuplet, a lead-in gap
- * that plain rests can't fill, or tuplets without ctx.fraction. Checked up front
- * so a failure never leaves one target written and the next not.
+ * One chord/rest of a target voice, as plain data (see _voiceCRs).
+ * @typedef {{tick:number, end:number, isRest:boolean, inTuplet:boolean}} VoiceCR
+ */
+
+/**
+ * How a writer reaches selStart in one target voice (see planLeadIn).
+ * `mode`: "at" — a CR starts at `from` === selStart; "rests" — overwrite with rests
+ * from `from` (a CR start) to selStart; "shorten" — shorten the chord at `from` to
+ * end at selStart — or, when that length isn't one note value, to the longest value
+ * that fits (`keep` ticks), the rest of the way being rests; "gap" — the voice is
+ * empty from `from`: position there and fill with rests.
+ * @typedef {{from:number, mode:string, error:string, keep?:number}} LeadIn
+ */
+
+/**
+ * The CRs of one voice of a staff in [from, to), in order. `from` must be a bar
+ * start (no CR crosses it); an empty voice yields [].
+ * @param {EffectCtx} ctx  needs curScore, Element
+ * @param {number} staffIdx @param {number} voice @param {number} from @param {number} to
+ * @returns {VoiceCR[]}
+ */
+function _voiceCRs(ctx, staffIdx, voice, from, to) {
+    /** @type {VoiceCR[]} */
+    var out = [];
+    var cur = _cursorAt(ctx, staffIdx, voice, from);
+    while (cur.segment && cur.tick < to) {
+        var el = cur.element;
+        if (el && el.duration && cur.tick >= from)
+            out.push({ tick: cur.tick, end: cur.tick + _actualTicks(el),
+                       isRest: el.type === ctx.Element.REST, inTuplet: !!el.tuplet });
+        cur.next();
+    }
+    return out;
+}
+
+/**
+ * Plan the lead-in of one target voice (see the block comment). Pure.
+ * @param {VoiceCR[]} crs        the voice's CRs from the bar start through selStart
+ * @param {number} measureTick   start of the bar holding selStart
+ * @param {number} selStart
+ * @param {number} division      ticks per quarter
+ * @param {boolean} canShorten   ctx.fraction exists (chord.duration takes a Fraction)
+ * @returns {LeadIn}
+ */
+function planLeadIn(crs, measureTick, selStart, division, canShorten) {
+    var prevEnd = measureTick;
+    for (var i = 0; i < crs.length; ++i) {
+        var c = crs[i];
+        if (c.tick === selStart) return { from: selStart, mode: "at", error: "" };
+        if (c.tick < selStart && selStart < c.end) {
+            if (c.inTuplet) return { from: c.tick, mode: "at", error: TARGET_TUPLET_ERROR };
+            var keep = longestValue(selStart - c.tick, division);
+            if (!c.isRest && canShorten && keep > 0) {
+                var rest = _restLead(c.tick + keep, selStart, division, "shorten");
+                return { from: c.tick, mode: "shorten", keep: keep, error: rest.error };
+            }
+            return _restLead(c.tick, selStart, division, "rests");
+        }
+        if (c.end <= selStart) prevEnd = c.end;
+    }
+    return _restLead(prevEnd, selStart, division, "gap");
+}
+
+/**
+ * The longest single note value (plain or single-dotted) that fits in `ticks`,
+ * or 0. What Score::changeCRlen can shorten a chord to in one piece. Pure.
+ * @param {number} ticks @param {number} division @returns {number}
+ */
+function longestValue(ticks, division) {
+    for (var v = division * 4; v >= division / 32; v /= 2) {
+        if (v * 1.5 <= ticks && v * 1.5 <= division * 4) return v * 1.5;
+        if (v <= ticks) return v;
+    }
+    return 0;
+}
+
+/** @param {number} from @param {number} selStart @param {number} division @param {string} mode
+ *  @returns {LeadIn} */
+function _restLead(from, selStart, division, mode) {
+    var ok = splitRestTicks(selStart - from, division).leftover === 0;
+    return { from: from, mode: mode, error: ok ? "" : ALIGN_ERROR };
+}
+
+/**
+ * Plan the trailing pad of one target voice (see the block comment): the tick the
+ * rests written after the copy must reach. Pure.
+ * @param {VoiceCR[]} crs        the voice's CRs in the bar the copy ends in (before writing)
+ * @param {number} writtenEnd    where the copy ends
+ * @param {number} barEnd        that bar's end
+ * @returns {{to:number, error:string}}
+ */
+function planTrail(crs, writtenEnd, barEnd) {
+    for (var i = 0; i < crs.length; ++i) {
+        var c = crs[i];
+        if (c.tick >= writtenEnd) return { to: c.tick, error: "" };
+        if (c.end > writtenEnd)
+            return c.inTuplet ? { to: writtenEnd, error: TARGET_TUPLET_ERROR } : { to: c.end, error: "" };
+    }
+    return { to: barEnd, error: "" };
+}
+
+/**
+ * Where one target's write starts and where its trailing pad ends.
+ * @typedef {{staffIdx:number, voice:number, lead:LeadIn, trailTo:number}} TargetPlan
+ */
+
+/**
+ * Plan one target voice for the read source, before anything is written.
+ * @param {EffectCtx} ctx  needs curScore, Element, division, fraction
+ * @param {number} staffIdx @param {number} voice
+ * @param {SourceRead} read  a checked read (crs non-empty)
+ * @param {number} measureTick  start of the bar holding read.selStart
+ * @returns {{plan:TargetPlan|null, error:string}}
+ */
+function _planTarget(ctx, staffIdx, voice, read, measureTick) {
+    var div = ctx.division || 480;
+    // Up to selStart INCLUSIVE: a CR starting right there means no lead-in at all.
+    var lead = planLeadIn(_voiceCRs(ctx, staffIdx, voice, measureTick, read.selStart + 1),
+                          measureTick, read.selStart, div, !!ctx.fraction);
+    if (lead.error) return { plan: null, error: lead.error };
+    var last = read.crs[read.crs.length - 1];
+    var writtenEnd = last.tick + last.ticks;
+    var m = _measureAt(ctx, writtenEnd - 1);
+    var barStart = (m && m.firstSegment) ? m.firstSegment.tick : writtenEnd;
+    var barEnd = m ? _measureStartOrEnd(ctx, m.nextMeasure) : writtenEnd;
+    var trail = planTrail(_voiceCRs(ctx, staffIdx, voice, barStart, barEnd), writtenEnd, barEnd);
+    if (trail.error) return { plan: null, error: trail.error };
+    return { plan: { staffIdx: staffIdx, voice: voice, lead: lead, trailTo: trail.to }, error: "" };
+}
+
+/**
+ * A cursor on (staffIdx, voice) parked exactly at `tick`, even where that voice has
+ * no element (a gap in voices 2-4): rewindToTick on the voice itself would skip
+ * FORWARD (api-gotchas), so rewind on a track that HAS an element there and then
+ * switch track (setStaffIdx/setVoice keep the segment). null if no track has one.
+ * @param {EffectCtx} ctx @param {number} staffIdx @param {number} voice @param {number} tick
+ * @returns {MS.Cursor|null}
+ */
+function _cursorAnchoredAt(ctx, staffIdx, voice, tick) {
+    var cur = _cursorAt(ctx, staffIdx, voice, tick);
+    if (cur.segment && cur.tick === tick) return cur;
+    var seg = _segmentAt(ctx, tick);
+    if (!seg) return null;
+    var tracks = (ctx.curScore.nstaves || 0) * 4;   // (the comp forms' ctx has no JazzKit)
+    for (var t = 0; t < tracks; ++t) {
+        if (!seg.elementAt(t)) continue;
+        var c = _cursorAt(ctx, Math.floor(t / 4), t % 4, tick);
+        if (!c.segment || c.tick !== tick) continue;
+        c.staffIdx = staffIdx;
+        c.voice = voice;
+        return c;
+    }
+    return null;
+}
+
+/**
+ * The cursor a writer starts from: carries out the plan's lead-in up to the point
+ * where _writeSource's leading rests take over (it writes rests from cur.tick to
+ * selStart). Runs inside the caller's startCmd (a shorten is an edit). null only if
+ * no track has a segment to anchor on (can't happen at selStart: the source has one).
+ * @param {EffectCtx} ctx @param {TargetPlan} plan @param {number} selStart
+ * @returns {MS.Cursor|null}
+ */
+function _leadCursor(ctx, plan, selStart) {
+    var lead = plan.lead;
+    if (lead.mode === "shorten") {
+        var keep = lead.keep || (selStart - lead.from);
+        var c = _cursorAt(ctx, plan.staffIdx, plan.voice, lead.from);
+        var f = ticksToFraction(keep, ctx.division);
+        if (c.element && ctx.fraction) _trySet(c.element, "duration", ctx.fraction(f.z, f.n));
+        // changeCRlen rest-filled from the chord's new end; _writeSource rests on to selStart
+        return _cursorAt(ctx, plan.staffIdx, plan.voice, lead.from + keep);
+    }
+    if (lead.mode !== "gap") return _cursorAt(ctx, plan.staffIdx, plan.voice, lead.from);
+    return _cursorAnchoredAt(ctx, plan.staffIdx, plan.voice, lead.from)
+        || _cursorAnchoredAt(ctx, plan.staffIdx, plan.voice, selStart);
+}
+
+/**
+ * Read the source and plan every target, refusing — BEFORE anything is written —
+ * whatever the writers could only get half right: an empty selection, a nested
+ * tuplet, tuplets without ctx.fraction, a lead-in plain rests can't fill, a target
+ * tuplet across the edge. Checked up front so a failure never leaves one target
+ * written and the next not.
  * @param {EffectCtx} ctx
  * @param {JK.CompRegion} params
- * @returns {SourceRead}
+ * @param {{staffIdx:number, voice:number}[]} targets  the target voices to plan
+ * @returns {{read:SourceRead, plans:TargetPlan[], error:string}}
  */
-function _readCheckedSource(ctx, params) {
+function _readAndPlan(ctx, params, targets) {
     var read = _readSource(ctx, params.selStart, params.selEnd, params.srcStaffIdx);
-    if (read.error) return read;
-    if (read.crs.length === 0) { read.error = "Nothing to copy in the selection."; return read; }
-    if (splitRestTicks(read.selStart - params.measureTick, ctx.division).leftover !== 0) {
-        read.error = ALIGN_ERROR; return read;
-    }
+    /** @type {TargetPlan[]} */
+    var plans = [];
+    var fail = function (/** @type {string} */ msg) { return { read: read, plans: [], error: msg }; };
+    if (read.error) return fail(read.error);
+    if (read.crs.length === 0) return fail("Nothing to copy in the selection.");
     for (var i = 0; i < read.crs.length; ++i)
-        if (read.crs[i].tuplet && !ctx.fraction) { read.error = FRACTION_ERROR; return read; }
-    return read;
+        if (read.crs[i].tuplet && !ctx.fraction) return fail(FRACTION_ERROR);
+    for (var t = 0; t < targets.length; ++t) {
+        var p = _planTarget(ctx, targets[t].staffIdx, targets[t].voice, read, params.measureTick);
+        if (!p.plan) return fail(p.error);
+        plans.push(p.plan);
+    }
+    return { read: read, plans: plans, error: "" };
 }
 
 /**
@@ -427,15 +683,15 @@ function _readCheckedSource(ctx, params) {
  * write one chord/rest per source CR via `writeCR(cursor, cr)` (the cursor's input
  * duration is already set). A source tuplet is re-created (cursor.addTuplet) when
  * its first member comes up, so the members' NOMINAL durations then fill it exactly.
- * The source must have passed _readCheckedSource.
+ * The source must have passed _readAndPlan.
  *
- * The cursor must be parked at the MEASURE start, not at selStart: we CANNOT
- * rewindToTick(selStart) on an empty target — rewindToTick skips forward past any
- * segment with no element in this track (api-gotchas), and a full-measure rest has
- * its only segment at the MEASURE START, so a score-wide segment at selStart
- * (created by the source staff) has no target element and the cursor skips forward
- * into the NEXT measure. The leading rest both positions us and splits the spanning
- * rest at selStart (the "divide existing notes" step).
+ * The cursor comes from _leadCursor: at selStart, or at the start of the target CR
+ * covering selStart. We CANNOT simply rewindToTick(selStart) on the target — it
+ * skips forward past any segment with no element in this track (api-gotchas), and a
+ * full-measure rest has its only segment at the MEASURE START, so a score-wide
+ * segment at selStart (created by the source staff) has no target element and the
+ * cursor skips forward into the NEXT measure. The leading rest both positions us and
+ * splits the spanning rest at selStart (the "divide existing notes" step).
  * @param {EffectCtx} ctx  needs division
  * @param {MS.Cursor} cur
  * @param {number} selStart
@@ -552,18 +808,36 @@ function planTies(src, onePerCR) {
 }
 
 /**
+ * The copied CRs with the source CRs just outside them (read.before/after) at
+ * either end, so planTies also sees a tie ACROSS the selection edge. Such a tie
+ * lands on a target note this run didn't write — the comp an earlier run made of
+ * the neighbouring bars — and is only made when that note is there and is ours
+ * (same pitch, and a cue/slash note: see _tieStartNote). Comping a passage in
+ * several selections then keeps its ties. Pure.
+ * @param {SourceCR[]} src @param {SourceRead} read @returns {SourceCR[]}
+ */
+function withEdges(src, read) {
+    var out = read.before ? [read.before] : [];
+    out = out.concat(src);
+    if (read.after) out.push(read.after);
+    return out;
+}
+
+/**
  * The planned ties for one target staff.
- * @param {SourceCR[]} src @param {number} staffIdx @param {number} voice
+ * @param {SourceCR[]} src  the written CRs, plus their edge neighbours (withEdges)
+ * @param {number} staffIdx @param {number} voice
  * @param {number} pitch  the written pitch, or -1 to keep the source pitch
+ * @param {string} mark   what marks a note as ours: "cue" (cue-size) or "slash"
  * @returns {JK.TiePlan[]}
  */
-function _tiePlans(src, staffIdx, voice, pitch) {
+function _tiePlans(src, staffIdx, voice, pitch, mark) {
     var ts = planTies(src, pitch !== -1);
     /** @type {JK.TiePlan[]} */
     var out = [];
     for (var i = 0; i < ts.length; ++i)
         out.push({ staffIdx: staffIdx, voice: voice, tick: ts[i].tick, nextTick: ts[i].nextTick,
-                   pitch: pitch !== -1 ? pitch : ts[i].pitch });
+                   pitch: pitch !== -1 ? pitch : ts[i].pitch, mark: mark });
     return out;
 }
 
@@ -593,8 +867,22 @@ function _noteAt(ctx, tick, track, pitch) {
 }
 
 /**
+ * Whether a target note is one a comp writer made (`mark` of its TiePlan): a cue
+ * note is cue-size, a slash has a slash notehead. Guards the edge ties, whose far
+ * note was written by an earlier run — never tie into the user's own notes.
+ * @param {EffectCtx} ctx @param {MS.Note|null} n @param {string} mark @returns {boolean}
+ */
+function _isCompNote(ctx, n, mark) {
+    if (!n) return false;
+    if (mark === "slash") return n.headGroup === ctx.NoteHeadGroup.HEAD_SLASH;
+    var chord = n.parent;
+    return !!(chord && chord.small);
+}
+
+/**
  * The start note of a planned tie, or null when the tie can't be made safely
- * (missing, already tied, or no same-pitch note at nextTick in the same voice).
+ * (missing, already tied, not a comp note, or no same-pitch comp note at nextTick
+ * in the same voice).
  * @param {EffectCtx} ctx @param {JK.TiePlan} plan @returns {MS.Note|null}
  */
 function _tieStartNote(ctx, plan) {
@@ -602,8 +890,8 @@ function _tieStartNote(ctx, plan) {
         if (plan.voice >= 0 && v !== plan.voice) continue;
         var track = plan.staffIdx * 4 + v;
         var n = _noteAt(ctx, plan.tick, track, plan.pitch);
-        if (!n || n.tieForward) continue;
-        if (_noteAt(ctx, plan.nextTick, track, plan.pitch)) return n;
+        if (!n || n.tieForward || !_isCompNote(ctx, n, plan.mark)) continue;
+        if (_isCompNote(ctx, _noteAt(ctx, plan.nextTick, track, plan.pitch), plan.mark)) return n;
     }
     return null;
 }
@@ -639,15 +927,15 @@ function applyTies(ctx, plans, params) {
  * Write the read source into voice 1 of one target staff: pitches/durations
  * first, then a second pass to cue-size the chords and copy their articulations.
  * @param {EffectCtx} ctx  needs curScore, newElement, Element, division
- * @param {number} staffIdx
- * @param {number} measureTick  start of the measure containing selStart
- * @param {number} selStart
- * @param {number} selEnd       exclusive
- * @param {SourceCR[]} src
+ * @param {TargetPlan} plan  from _readAndPlan (voice 0)
+ * @param {SourceRead} read
  * @returns {JK.TiePlan[]}  the ties to add once the command is closed
  */
-function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
-    _writeSource(ctx, _cursorAt(ctx, staffIdx, 0, measureTick), selStart, src, function (cur, cr) {
+function _writeCueInto(ctx, plan, read) {
+    var staffIdx = plan.staffIdx, selStart = read.selStart, selEnd = read.selEnd, src = read.crs;
+    var cur = _leadCursor(ctx, plan, selStart);
+    if (!cur) return [];
+    _writeSource(ctx, cur, selStart, src, function (cur, cr) {
         if (cr.isRest || cr.pitches.length === 0) {
             cur.addRest();
         } else {
@@ -662,7 +950,7 @@ function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
             _trySet(el, "small", true);      // every cue slice is cue-sized
             return el;
         });
-    return _tiePlans(src, staffIdx, 0, -1);
+    return _tiePlans(withEdges(src, read), staffIdx, 0, -1, "cue");
 }
 
 /**
@@ -674,23 +962,36 @@ function _writeCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
  * @returns {JK.CompResult}
  */
 function compCuesNotes(ctx, params) {
-    var read = _readCheckedSource(ctx, params);
-    if (read.error) return { targetsDone: 0, error: read.error };
-    var src = read.crs;
-
-    ctx.curScore.startCmd();
-    var done = 0;
-    /** @type {JK.TiePlan[]} */
-    var ties = [];
+    // Which writer (and so which voice) each target gets: a drum staff takes the
+    // voice-3 cue, a drum target without a drumset falls back to slashes (voice 1),
+    // and a drumset without a usable pitch is skipped.
+    /** @type {{staffIdx:number, voice:number, kind:string}[]} */
+    var targets = [];
     for (var t = 0; t < params.targets.length; ++t) {
         var tgt = params.targets[t];
-        ties = ties.concat(tgt.isDrum
-            ? _writeDrumCueInto(ctx, tgt.staffIdx, params.measureTick, read.selStart, read.selEnd, src)
-            : _writeCueInto(ctx, tgt.staffIdx, params.measureTick, read.selStart, read.selEnd, src));
-        ++done;
+        var kind = "cue";
+        if (tgt.isDrum) {
+            var pitch = _drumCuePitch(ctx, tgt.staffIdx);
+            kind = pitch === null ? "slash" : (pitch < 0 ? "skip" : "drum");
+        }
+        targets.push({ staffIdx: tgt.staffIdx, voice: kind === "drum" ? DRUM_CUE_VOICE : 0, kind: kind });
+    }
+    var planned = targets.filter(function (x) { return x.kind !== "skip"; });
+    var rp = _readAndPlan(ctx, params, planned);
+    if (rp.error) return { targetsDone: 0, error: rp.error };
+
+    ctx.curScore.startCmd();
+    /** @type {JK.TiePlan[]} */
+    var ties = [];
+    for (var i = 0; i < planned.length; ++i) {
+        var k = planned[i].kind, plan = rp.plans[i];
+        ties = ties.concat(k === "drum" ? _writeDrumCueInto(ctx, plan, rp.read)
+            : k === "slash" ? _writeSlashRhythmInto(ctx, plan, rp.read)
+            : _writeCueInto(ctx, plan, rp.read));
     }
     ctx.curScore.endCmd();
-    return { targetsDone: done, error: "", ties: ties };
+    // A drumset with no usable pitch is skipped but counts as handled.
+    return { targetsDone: targets.length, error: "", ties: ties };
 }
 
 // --- To Comp Slashes (direct-API slash notation, no cmd) --------------------
@@ -776,19 +1077,19 @@ function _applySlashChord(ctx, chord, stemless, line) {
 
 /**
  * Write the source rhythm as rhythmic slashes into voice 1 of one target staff.
- * Same positioning as _writeCueInto (rewind to measure start, fill to selStart);
+ * Same positioning as _writeCueInto (_leadCursor, then fill to selStart);
  * chords → a single slash note, rests stay rests; then slash every written chord.
  * @param {EffectCtx} ctx  needs curScore, Element, Direction, NoteHeadGroup
- * @param {number} staffIdx
- * @param {number} measureTick
- * @param {number} selStart
- * @param {number} selEnd   exclusive
- * @param {SourceCR[]} src
+ * @param {TargetPlan} plan  from _readAndPlan (voice 0)
+ * @param {SourceRead} read
  * @returns {JK.TiePlan[]}  the ties to add once the command is closed
  */
-function _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
+function _writeSlashRhythmInto(ctx, plan, read) {
+    var staffIdx = plan.staffIdx, selStart = read.selStart, selEnd = read.selEnd, src = read.crs;
     var pitch = _slashPitch(ctx, staffIdx, 0);   // valid drum pitch on a drum staff
-    _writeSource(ctx, _cursorAt(ctx, staffIdx, 0, measureTick), selStart, src, function (cur, cr) {
+    var start = _leadCursor(ctx, plan, selStart);
+    if (!start) return [];
+    _writeSource(ctx, start, selStart, src, function (cur, cr) {
         if (cr.isRest) cur.addRest();
         else cur.addNote(pitch, false);
     });
@@ -802,7 +1103,7 @@ function _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src
             return el;
         });
     // A drum staff forces the voice by pitch, so the slash may sit in any voice.
-    return pitch < 0 ? [] : _tiePlans(src, staffIdx, -1, pitch);
+    return pitch < 0 ? [] : _tiePlans(withEdges(src, read), staffIdx, -1, pitch, "slash");
 }
 
 // --- Drum comp cue (direct-API cue notes in voice 3, above the staff) --------
@@ -863,35 +1164,33 @@ var DRUM_CUE_VOICE = 2;   // 0-indexed → UI voice 3 (the upper comping voice)
  * caller's startCmd/endCmd (compCuesNotes wraps it) — the transient invalid-duration
  * chords are only valid once `chord.duration` is set, before layout at endCmd.
  * @param {EffectCtx} ctx  needs curScore, newElement, Element, Direction, NoteHeadGroup, division
- * @param {number} staffIdx
- * @param {number} measureTick
- * @param {number} selStart
- * @param {number} selEnd   exclusive
- * @param {SourceCR[]} src
+ * @param {TargetPlan} plan  from _readAndPlan (voice DRUM_CUE_VOICE)
+ * @param {SourceRead} read
  * @returns {JK.TiePlan[]}  the ties to add once the command is closed
  */
-function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
+function _writeDrumCueInto(ctx, plan, read) {
+    var staffIdx = plan.staffIdx, selStart = read.selStart, selEnd = read.selEnd;
     var pitch = _drumCuePitch(ctx, staffIdx);
-    if (pitch === null) return _writeSlashRhythmInto(ctx, staffIdx, measureTick, selStart, selEnd, src);
-    if (pitch < 0) return [];                   // drumset but no valid pitch
-    var V = DRUM_CUE_VOICE;
+    if (pitch === null || pitch < 0) return [];   // compCuesNotes routes these elsewhere
+    var V = plan.voice;
 
-    // Pass 1: rest shell that TILES THE WHOLE MEASURE in voice V — leading gap up to
-    // selStart, the source rhythm, then a trailing rest to the measure end. Voice V
-    // (unlike voice 1) is NOT auto-filled, so a partial shell leaves a GAP; that gap
-    // is what a later `cursor.add`/`changeCRlen` reflows into, corrupting the bar
-    // (two eighths at the bar start dropped the 2nd note; three quarters split the
-    // middle into a gap+eighth). A complete tiling means every replacement is an
-    // exact in-place swap. addRest goes through enterRest — no voice-forcing.
-    // The trailing rest pads the measure the source ENDS in (not the one it starts
-    // in — a multi-bar selection would otherwise leave its last bar gapped).
-    // Tuplets are collapsed first: a chord can't be placed inside one (collapseTuplets).
-    src = collapseTuplets(src);
+    // Pass 1: a rest shell that leaves voice V TILED — no gap anywhere in the bars it
+    // touches. Voice V (unlike voice 1) is NOT auto-filled, so a partial shell leaves
+    // a GAP, and a gap is what a later `cursor.add`/`changeCRlen` reflows into,
+    // corrupting the bar (two eighths at the bar start dropped the 2nd note; three
+    // quarters split the middle into a gap+eighth). With no gap every pass-2
+    // replacement is an exact in-place swap. addRest goes through enterRest — no
+    // voice-forcing. The lead-in (_leadCursor) starts where voice V's existing
+    // content stops (the bar start in an empty voice), the shell copies the source
+    // rhythm, and the trailing pad runs to plan.trailTo — the next existing voice-V
+    // CR or the barline of the bar the source ENDS in — so an earlier cue elsewhere
+    // in the bar is kept. Tuplets are collapsed first: a chord can't be placed inside
+    // one (collapseTuplets).
+    var src = collapseTuplets(read.crs);
     var last = src[src.length - 1];
     var writtenEnd = last.tick + last.ticks;
-    var mEnd = _measureEndTick(ctx, writtenEnd - 1);
-    var cur = _cursorAt(ctx, staffIdx, 0, measureTick);   // voice 0 always has content
-    cur.voice = V;                      // switch (keeps the segment; api-gotchas empty-voice trick)
+    var cur = _leadCursor(ctx, plan, selStart);
+    if (!cur) return [];
     /** @type {{[tick:number]: boolean|undefined}} */
     var noteTicks = {};                 // set at each note position; absent elsewhere
     _writeSource(ctx, cur, selStart, src, function (c, cr) {
@@ -901,17 +1200,16 @@ function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
         if (_isSpellable(cr.num, cr.den)) c.addRest();
         else _addRestTicks(ctx, c, cr.ticks);
     });
-    if (writtenEnd < mEnd) _addRestTicks(ctx, cur, mEnd - writtenEnd);
+    if (writtenEnd < plan.trailTo) _addRestTicks(ctx, cur, plan.trailTo - writtenEnd);
 
-    // Pass 2: replace each note-beat rest with a cue chord. Rewind on voice 0 (has a
-    // boundary at measureTick) then switch to voice V and walk the shell. Since the
-    // shell fully tiles the measure, each note-beat swap is exact — no reflow shifts
-    // the segments the cursor still has to visit.
-    var wc = _cursorAt(ctx, staffIdx, 0, measureTick);
-    wc.voice = V;
+    // Pass 2: replace each note-beat rest with a cue chord, walking the shell in
+    // voice V from selStart (the shell has a rest there now, so the rewind lands
+    // exactly). Since voice V is tiled, each note-beat swap is exact — no reflow
+    // shifts the segments the cursor still has to visit.
+    var wc = _cursorAt(ctx, staffIdx, V, selStart);
     // The markings go on the chord built here (a plugin-owned chord is already in the
     // score after wc.add, so chord.add undo-adds normally); fermatas go via the
-    // cursor, onto the segment — hence the `selStart` guard on the leading shell rest.
+    // cursor, onto the segment.
     //
     // Sizing the chord: a fresh chord is ZERO ticks long, so `chord.duration = D` is
     // a "lengthen" (Score::changeCRlen → makeGap). makeGap counts the chord's own
@@ -939,7 +1237,7 @@ function _writeDrumCueInto(ctx, staffIdx, measureTick, selStart, selEnd, src) {
         _applyDrumCueChord(ctx, chord);
         return chord;
     });
-    return _tiePlans(src, staffIdx, V, pitch);
+    return _tiePlans(collapseTuplets(withEdges(src, read)), staffIdx, V, pitch, "cue");
 }
 
 /**
@@ -954,16 +1252,6 @@ function _firstInnerSegTick(ctx, seg, end) {
     for (var s = seg.nextInMeasure; s && s.tick < end; s = s.nextInMeasure)
         if (s.segmentType === ctx.Segment.ChordRest) return s.tick;
     return end;
-}
-
-/**
- * The first tick after the measure that contains `tick` (its exclusive end).
- * @param {EffectCtx} ctx @param {number} tick @returns {number}
- */
-function _measureEndTick(ctx, tick) {
-    var m = _measureAt(ctx, tick);
-    if (!m) return tick;
-    return _measureStartOrEnd(ctx, m.nextMeasure);
 }
 
 /**
@@ -999,21 +1287,19 @@ function _isSpellable(num, den) {
  * @returns {JK.CompResult}
  */
 function compSlashesNotes(ctx, params) {
-    var read = _readCheckedSource(ctx, params);
-    if (read.error) return { targetsDone: 0, error: read.error };
+    var targets = params.targets.map(function (tgt) {
+        return { staffIdx: (typeof tgt === "number") ? tgt : tgt.staffIdx, voice: 0 };
+    });
+    var rp = _readAndPlan(ctx, params, targets);
+    if (rp.error) return { targetsDone: 0, error: rp.error };
 
     ctx.curScore.startCmd();
-    var done = 0;
     /** @type {JK.TiePlan[]} */
     var ties = [];
-    for (var t = 0; t < params.targets.length; ++t) {
-        var tgt = params.targets[t];
-        var s = (typeof tgt === "number") ? tgt : tgt.staffIdx;
-        ties = ties.concat(_writeSlashRhythmInto(ctx, s, params.measureTick, read.selStart, read.selEnd, read.crs));
-        ++done;
-    }
+    for (var t = 0; t < rp.plans.length; ++t)
+        ties = ties.concat(_writeSlashRhythmInto(ctx, rp.plans[t], rp.read));
     ctx.curScore.endCmd();
-    return { targetsDone: done, error: "", ties: ties };
+    return { targetsDone: rp.plans.length, error: "", ties: ties };
 }
 
 // --- Fill Empty Beats with Slashes (direct-API beat slashes) ----------------
@@ -1618,8 +1904,118 @@ function fullBarRests(ctx) {
 
 // --- Format Line Breaks -----------------------------------------------------
 // The placement algorithm (which boxes get a break) is the pure, unit-tested
-// LineBreaks.computeBreaks; the .qml passes in the already-computed measures to
-// clear and the measures to break at. This executor only applies them.
+// LineBreaks.computeBreaks. readLineBoxes reads the score's structural facts into
+// its input (here, not in the .qml, so the harness drives the same read), and
+// applyLineBreaks attaches the result.
+
+/** @param {EffectCtx} ctx @param {MS.Measure} m @returns {boolean} */
+function _endsWithDoubleBarline(ctx, m) {
+    for (var seg = m.firstSegment; seg; seg = seg.nextInMeasure) {
+        if (seg.segmentType !== ctx.Segment.EndBarLine) continue;
+        var bl = /** @type {*} */ (seg.elementAt(0));
+        if (bl && bl.type === ctx.Element.BAR_LINE && ctx.BarLineType && bl.barlineType === ctx.BarLineType.DOUBLE)
+            return true;
+    }
+    return false;
+}
+
+/**
+ * Every volta's measure span [start, end) in ticks. Voltas are spanners in the
+ * score's spanner map (Score::spannerList); spannerTick/spannerTicks read as
+ * Fractions. A build that doesn't expose them just yields no endings.
+ * @param {EffectCtx} ctx @returns {{start:number, end:number}[]}
+ */
+function _readVoltas(ctx) {
+    var out = [];
+    var sp = ctx.curScore.spanners || [];
+    for (var i = 0; i < sp.length; ++i) {
+        var v = sp[i];
+        if (!v || v.type !== ctx.Element.VOLTA) continue;
+        var t = v.spannerTick, d = v.spannerTicks;
+        if (t && d && t.ticks !== undefined && d.ticks !== undefined)
+            out.push({ start: t.ticks, end: t.ticks + d.ticks });
+    }
+    return out;
+}
+
+/**
+ * A rehearsal mark on the measure: a segment annotation (any staff) of one of
+ * its segments.
+ * @param {EffectCtx} ctx @param {MS.Measure} m @returns {boolean}
+ */
+function _hasRehearsalMark(ctx, m) {
+    for (var seg = m.firstSegment; seg; seg = seg.nextInMeasure) {
+        var ann = seg.annotations || [];
+        for (var i = 0; i < ann.length; ++i)
+            if (ann[i] && ann[i].type === ctx.Element.REHEARSAL_MARK) return true;
+    }
+    return false;
+}
+
+/**
+ * A coda sign (the place a "To Coda" jumps to) on the measure — a Marker in the
+ * measure's own elements (cursor.add attaches a MARKER to the measure).
+ * @param {EffectCtx} ctx @param {MS.Measure} m @returns {boolean}
+ */
+function _hasCodaSign(ctx, m) {
+    var MT = ctx.MarkerType;
+    if (!MT) return false;
+    var els = m.elements || [];
+    for (var i = 0; i < els.length; ++i) {
+        var e = els[i];
+        if (e && e.type === ctx.Element.MARKER && (e.markerType === MT.CODA || e.markerType === MT.VARCODA))
+            return true;
+    }
+    return false;
+}
+
+/**
+ * Read `measures` (in score order) as the visual boxes LineBreaks.computeBreaks
+ * takes — a multimeasure rest is ONE box — with each box's structural facts.
+ * `last[i]` is box i's last measure, the one a break after it attaches to.
+ * A pickup is the first box's bar when it is excluded from the bar count, or
+ * shorter than its time signature.
+ * @param {EffectCtx} ctx  needs curScore, Segment, Element, LineBreaks; BarLineType, MarkerType
+ * @param {MS.Measure[]} measures
+ * @returns {{boxes:JK.LineBox[], last:MS.Measure[]}}
+ */
+function readLineBoxes(ctx, measures) {
+    var LB = /** @type {JK.LineBreaksLib} */ (ctx.LineBreaks);
+    /** @type {{[tick:number]: boolean|undefined}} */
+    var starts = {};
+    var hasStarts = false;
+    for (var mm = ctx.curScore.firstMeasureMM; mm; mm = mm.nextMeasureMM) {
+        if (!mm.firstSegment) continue;
+        starts[mm.firstSegment.tick] = true; hasStarts = true;
+    }
+    var tickOf = function (/** @type {MS.Measure} */ m) { return m.firstSegment ? m.firstSegment.tick : 0; };
+    var groups = LB.groupBoxes(measures.map(tickOf), hasStarts ? starts : null);
+    var spans = groups.map(function (g) {
+        return { firstTick: tickOf(measures[g.firstIdx]), lastTick: tickOf(measures[g.lastIdx]) };
+    });
+    var endings = LB.voltaFlags(_readVoltas(ctx), spans);
+    /** @type {JK.LineBox[]} */
+    var boxes = [];
+    /** @type {MS.Measure[]} */
+    var last = [];
+    for (var i = 0; i < groups.length; ++i) {
+        var first = measures[groups[i].firstIdx], lm = measures[groups[i].lastIdx];
+        var short = !!(first.ticks && first.ticks.ticks < first.timesigNominal.ticks);
+        boxes.push({
+            musicBars: groups[i].musicBars,
+            endsDouble: _endsWithDoubleBarline(ctx, lm),
+            repeatEnd: !!lm.repeatEnd,
+            repeatStart: !!first.repeatStart,
+            endingStart: endings[i].endingStart,
+            inEnding: endings[i].inEnding,
+            pickup: groups[i].musicBars === 1 && (!!first.excludeFromNumbering || (i === 0 && short)),
+            rehearsal: _hasRehearsalMark(ctx, first),
+            coda: _hasCodaSign(ctx, first)
+        });
+        last.push(lm);
+    }
+    return { boxes: boxes, last: last };
+}
 
 /**
  * Clear every existing layout break in `measures`, then add a LINE break to each
@@ -1663,6 +2059,10 @@ var effectsLib = {
     ticksToFraction: ticksToFraction,
     splitRestTicks: splitRestTicks,
     planTies: planTies,
+    planLeadIn: planLeadIn,
+    longestValue: longestValue,
+    planTrail: planTrail,
+    withEdges: withEdges,
     applyTies: applyTies,
     groupRests: groupRests,
     groupNotes: groupNotes,
@@ -1670,6 +2070,7 @@ var effectsLib = {
     collapseTuplets: collapseTuplets,
     fixMarcatoStaccatos: fixMarcatoStaccatos,
     fixCourtesyAccidentals: fixCourtesyAccidentals,
+    readLineBoxes: readLineBoxes,
     applyLineBreaks: applyLineBreaks
 };
 
